@@ -3,9 +3,12 @@
         <net-file value="map.net.xml"/>
         <route-files value="routes.rou.xml"/>
     </input>
-    
+
     <processing>
         <ignore-route-errors value="true"/>
     </processing>
 
+    <gui_only>
+        <gui-settings-file value="map.view.xml"/> 
+    </gui_only>
 </configuration>
