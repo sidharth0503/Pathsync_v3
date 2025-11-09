@@ -25,7 +25,7 @@ else:
     sys.exit("please declare 'SUMO_HOME' as an environment variable")
 
 # --- 3. DEFINE SUMO COMMAND ---
-sumoBinary = "sumo" # FINAL: Run Headless for maximum speed
+sumoBinary = "sumo-gui" # FINAL: Run Headless for maximum speed
 sumo_net_file = "simulation/map.net.xml" 
 sumoConfig = "simulation/map.sumocfg"
 
@@ -86,11 +86,15 @@ print(f"NetworkX graph 'G' created successfully with {routable_edge_count} routa
 
 
 # --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FIXED FOR SPEED AND RUNTIME) ---
+# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FIXED FOR SPEED AND RUNTIME) ---
+# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL VERSION) ---
+# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL VERSION) ---
 def update_live_traffic():
     """
-    (FIXED) The main "AI Engine" loop.
-    - Only updates graph every 10s for speed.
+    (FINAL) The main "AI Engine" loop.
     - Manually breaks the loop after 3600s.
+    - Implements AI Smart Traffic Light control (with correct phase logic).
+    - Updates graph weights for routing.
     """
     
     print("AI Engine: Background thread started. Attempting to launch and connect...")
@@ -98,6 +102,10 @@ def update_live_traffic():
     try:
         traci.start(sumoCmd, port=8813)
         print("AI Engine: SUMO started and Traci connected successfully.")
+        
+        # --- GET ALL TRAFFIC LIGHT IDs ---
+        traffic_light_ids = traci.trafficlight.getIDList()
+        print(f"AI Engine: Found {len(traffic_light_ids)} traffic lights to manage.")
         
     except Exception as e:
         print(f"AI Engine: Failed to launch/connect to Traci: {e}")
@@ -109,17 +117,61 @@ def update_live_traffic():
             traci.simulationStep()
             current_time = traci.simulation.getTime()
 
-            # --- THE RUNTIME FIX ---
-            # We will manually stop the simulation from inside Python
+            # --- 1. RUNTIME FIX ---
             if current_time > 3600:
                 print(f"AI Engine: Simulation time {current_time}s > 3600s. Stopping simulation.")
                 break # Exit the 'while True' loop
             
-            # --- THE SPEED FIX (Already in place) ---
+            # --- 2. AI & ROUTING LOGIC (Runs every 10s for speed) ---
             if int(current_time) % 10 == 0:
             
-                all_sumo_edges = traci.edge.getIDList()
+                # --- NEW: AI SMART TRAFFIC LIGHT LOGIC (CORRECTED) ---
+                for tl_id in traffic_light_ids:
+                    # Get all incoming lanes controlled by this light
+                    incoming_lanes = set(traci.trafficlight.getControlledLanes(tl_id))
+                    if not incoming_lanes:
+                        continue # Skip if this light controls no lanes
+
+                    # Find the lane with the most waiting cars
+                    best_lane = max(incoming_lanes, key=traci.lane.getLastStepHaltingNumber)
+                    
+                    if traci.lane.getLastStepHaltingNumber(best_lane) == 0:
+                        continue # No cars are waiting, skip this light
+                    
+                    # --- THIS IS THE CRITICAL FIX ---
+                    # Get the full 'program' for the light, which contains *only settable green phases*
+                    logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(tl_id)
+                    if not logic:
+                        continue
+
+                    # logic[0].phases contains the list of *settable* Phase objects
+                    settable_phases = logic[0].phases
+                    controlled_lanes = traci.trafficlight.getControlledLanes(tl_id)
+                    best_phase_index = -1 # This will be the index *of the settable phase* (e.g., 0, 1, 2, 3)
+
+                    # Find which of the "green" phases serves our 'best_lane'
+                    for i, phase in enumerate(settable_phases):
+                        try:
+                            # Find where our 'best_lane' is in the state string
+                            lane_index_in_state = controlled_lanes.index(best_lane)
+                            
+                            # Check the state string (e.g., "GrGrGrrr") at that lane's index
+                            if lane_index_in_state < len(phase.state):
+                                lane_state = phase.state[lane_index_in_state].lower()
+                                if lane_state == 'g': # 'g' or 'G' means green
+                                    best_phase_index = i # 'i' is the *correct* settable phase index
+                                    break
+                        except Exception:
+                            # This can fail if 'best_lane' isn't in 'controlled_lanes' for some reason
+                            pass 
+                    
+                    # If we found a valid green phase and it's not already active, set it.
+                    current_phase = traci.trafficlight.getPhase(tl_id)
+                    if best_phase_index != -1 and current_phase != best_phase_index:
+                        traci.trafficlight.setPhase(tl_id, best_phase_index)
                 
+                # --- OLD: DIGITAL TWIN (Graph Weight Update) ---
+                all_sumo_edges = traci.edge.getIDList()
                 for edge_id in all_sumo_edges:
                     if edge_id in edge_id_to_uv:
                         u, v = edge_id_to_uv[edge_id]
@@ -127,22 +179,21 @@ def update_live_traffic():
                             current_travel_time = traci.edge.getTraveltime(edge_id) 
                             G.edges[u, v, edge_id]['travel_time'] = current_travel_time
                             
-                print(f"AI Engine: Heartbeat. Sim Time: {current_time}s. Graph weights updated.")
+                print(f"AI Engine: Heartbeat. Sim Time: {current_time}s. Lights updated. Graph weights updated.")
 
     except traci.TraCIException as e:
-        # This will catch the error if the simulation stops unexpectedly
         print(f"AI Engine: Traci connection error (simulation likely ended): {e}")
     except Exception as e:
         print(f"AI Engine: An unexpected error occurred: {e}")
     finally:
-        # This will run after the loop breaks or if an error occurs
         print("AI Engine: Background thread stopping. Closing Traci connection.")
         try:
             traci.close()
         except Exception:
-            pass # Connection might already be closed
+            pass 
 
     print("AI Engine: Background thread stopped.")
+    
 
 # --- 7. START THE BACKGROUND THREAD ---
 print("AI Engine: Starting background thread...")
