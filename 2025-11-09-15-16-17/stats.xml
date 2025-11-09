@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2025-11-09 15:31:01 by Eclipse SUMO GUI Version 1.24.0
+<sumoConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file value="D:\Projects\Smart India Hackathon\Pathsync v3\2025-11-09-15-16-17\osm.net.xml.gz"/>
+        <route-files value="D:\Projects\Smart India Hackathon\Pathsync v3\2025-11-09-15-16-17\osm.passenger.trips.xml"/>
+        <additional-files value="D:\Projects\Smart India Hackathon\Pathsync v3\2025-11-09-15-16-17\osm.poly.xml.gz,D:\Projects\Smart India Hackathon\Pathsync v3\2025-11-09-15-16-17\output.add.xml"/>
+    </input>
+
+    <output>
+        <tripinfo-output value="D:\Projects\Smart India Hackathon\Pathsync v3\2025-11-09-15-16-17\tripinfos.xml"/>
+        <statistic-output value="D:\Projects\Smart India Hackathon\Pathsync v3\2025-11-09-15-16-17\stats.xml"/>
+    </output>
+
+    <processing>
+        <ignore-route-errors value="true"/>
+        <tls.actuated.jam-threshold value="30"/>
+    </processing>
+
+    <routing>
+        <device.rerouting.adaptation-steps value="18"/>
+        <device.rerouting.adaptation-interval value="10"/>
+    </routing>
+
+    <report>
+        <verbose value="true"/>
+        <duration-log.statistics value="true"/>
+        <no-step-log value="true"/>
+    </report>
+
+    <gui_only>
+        <gui-settings-file value="D:\Projects\Smart India Hackathon\Pathsync v3\2025-11-09-15-16-17\osm.view.xml"/>
+    </gui_only>
+
+</sumoConfiguration>
+-->
+
+<statistics xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/statistic_file.xsd">
+    <performance clockBegin="411132.70" clockEnd="411294.71" clockDuration="162.02" traciDuration="0.65" realTimeFactor="4.10" vehicleUpdatesPerSecond="16680.29" personUpdatesPerSecond="0.00" begin="0.00" end="665.00" duration="665.00"/>
+    <vehicles loaded="11102" inserted="9042" running="7899" waiting="171"/>
+    <teleports total="232" jam="94" yield="137" wrongLane="1"/>
+    <safety collisions="0" emergencyStops="0" emergencyBraking="1"/>
+    <persons loaded="0" running="0" jammed="0"/>
+    <personTeleports total="0" abortWait="0" wrongDest="0"/>
+    <vehicleTripStatistics count="1143" routeLength="1944.35" speed="10.45" duration="203.45" waitingTime="49.74" timeLoss="101.16" departDelay="1.28" departDelayWaiting="-1.00" totalTravelTime="232543.00" totalDepartDelay="1464.83"/>
+    <pedestrianStatistics number="0" routeLength="0.00" duration="0.00" timeLoss="0.00"/>
+    <rideStatistics number="0"/>
+    <transportStatistics number="0"/>
+</statistics>

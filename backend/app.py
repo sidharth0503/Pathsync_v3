@@ -3,6 +3,8 @@ import sys
 import subprocess
 import time
 from flask import Flask, jsonify, request
+from flask_cors import CORS # Added for frontend communication
+from geopy.geocoders import Nominatim # Added for Geocoding (name lookup)
 import threading
 import networkx as nx
 import traci
@@ -10,6 +12,10 @@ import sumolib
 
 # --- 1. CONFIGURE FLASK APP ---
 app = Flask(__name__)
+CORS(app) # Enable CORS for frontend communication
+# Initialize the Nominatim geocoder (uses OpenStreetMap data)
+geolocator = Nominatim(user_agent="pathsync-v3-router")
+# -----------------------------
 
 # --- 2. FIND AND IMPORT TRACI / SUMOLIB ---
 if 'SUMO_HOME' in os.environ:
@@ -26,16 +32,15 @@ sumoConfig = "simulation/map.sumocfg"
 sumoCmd = [
     sumoBinary,
     "-c", sumoConfig,
-    "--end", "3600"
+    "--end", "3600" # Must match the 1-hour simulation length
 ]
 
-# --- 6. LOAD/CREATE YOUR ROUTING GRAPH (THE NEW WAY) ---
-# (Moving this *before* the AI thread, so the graph G exists)
+# --- 6. LOAD/CREATE YOUR ROUTING GRAPH ---
 print("Loading SUMO map into NetworkX graph...")
 
 net = sumolib.net.readNet(sumo_net_file)
 G = nx.MultiDiGraph() 
-edge_id_to_uv = {} # <-- THIS IS THE FIX (PART 1)
+edge_id_to_uv = {} # Lookup map for O(n) efficiency
 
 # Add all nodes
 for node in net.getNodes():
@@ -54,9 +59,6 @@ for edge in net.getEdges():
     travel_time = length / speed
     
     G.add_edge(from_node, to_node, key=edge_id, length=length, travel_time=travel_time)
-    
-    # --- THIS IS THE FIX (PART 2) ---
-    # Store a simple lookup: "edge_id" -> (from_node, to_node)
     edge_id_to_uv[edge_id] = (from_node, to_node)
 
 print("NetworkX graph 'G' created successfully from SUMO net.")
@@ -65,8 +67,7 @@ print("NetworkX graph 'G' created successfully from SUMO net.")
 # --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION ---
 def update_live_traffic():
     """
-    The main "AI Engine" loop.
-    This connects to SUMO and acts as the simulation's heartbeat.
+    The main "AI Engine" loop. Constantly updates graph with live travel times.
     """
     print("AI Engine: Background thread started. Attempting to launch and connect...")
     
@@ -81,27 +82,19 @@ def update_live_traffic():
     # --- This is the main loop ---
     while True:
         try:
-            # --- "Heartbeat" ---
             traci.simulationStep()
             current_time = traci.simulation.getTime()
 
-            # --- "DIGITAL TWIN" LOGIC (THE EFFICIENT O(n) FIX) ---
+            # --- DIGITAL TWIN LOGIC (O(n) efficient) ---
             all_sumo_edges = traci.edge.getIDList()
             
             for edge_id in all_sumo_edges:
-                # 1. Get live travel time
-                current_travel_time = traci.edge.getTraveltime(edge_id)
+                current_travel_time = traci.edge.getTraveltime(edge_id) # Fix: lowercase 't'
                 
-                # 2. Check if this edge is in our lookup map
                 if edge_id in edge_id_to_uv:
-                    # 3. Get the (u, v) nodes from the map
                     u, v = edge_id_to_uv[edge_id]
-                    
-                    # 4. Update the graph edge directly
                     G.edges[u, v, edge_id]['travel_time'] = current_travel_time
                         
-            # --- "DIGITAL TWIN" LOGIC ENDS ---
-
             if int(current_time) % 10 == 0:
                 print(f"AI Engine: Heartbeat. Sim Time: {current_time}s. Graph weights updated.")
             
@@ -121,13 +114,14 @@ def update_live_traffic():
 
     print("AI Engine: Background thread stopped.")
 
+
 # --- 7. START THE BACKGROUND THREAD ---
 print("AI Engine: Starting background thread...")
 ai_thread = threading.Thread(target=update_live_traffic, daemon=True)
 ai_thread.start()
 time.sleep(3) 
 
-# --- 8. DEFINE API ENDPOINTS (THE NEW WAY) ---
+# --- 8. DEFINE API ENDPOINTS ---
 @app.route('/')
 def index():
     return "Pathsync v3 Backend is running!"
@@ -136,27 +130,59 @@ def index():
 def get_route():
     try:
         data = request.get_json()
-        start_lat = data['start_lat']
-        start_lon = data['start_lon']
-        end_lat = data['end_lat']
-        end_lon = data['end_lon']
+        # NOW ACCEPTING LOCATION NAMES
+        start_name = data['start_name']
+        end_name = data['end_name']
 
+        # --- 1. GEOCORING: Convert Names to Coordinates (Needs Internet) ---
+        start_location = geolocator.geocode(f"{start_name}, Mysuru, Karnataka", timeout=10)
+        end_location = geolocator.geocode(f"{end_name}, Mysuru, Karnataka", timeout=10)
+
+        if not start_location or not end_location:
+            return jsonify({"status": "error", "message": "Location name not recognized or outside the map area."}), 404
+        
+        start_lat = start_location.latitude
+        start_lon = start_location.longitude
+        end_lat = end_location.latitude
+        end_lon = end_location.longitude
+        
+        # --- 2. ROUTING: (Original Logic) ---
+        # Convert GPS coords to SUMO's internal (x, y) coords
         start_x, start_y = net.convertLonLat2XY(start_lon, start_lat)
         end_x, end_y = net.convertLonLat2XY(end_lon, end_lat)
 
-        start_node = net.getNearestNodes(start_x, start_y)[0][0].getID()
-        end_node = net.getNearestNodes(end_x, end_y)[0][0].getID()
+        # Helper function to find the closest node ID to a given (x, y) point (Robust Search)
+        def find_closest_node(target_x, target_y):
+            min_dist = float('inf')
+            closest_node_id = None
+            
+            for node in net.getNodes():
+                node_x, node_y = node.getCoord()
+                dist = (target_x - node_x)**2 + (target_y - node_y)**2
+                
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_node_id = node.getID()
+            return closest_node_id
 
+        # Find the nearest graph nodes
+        start_node = find_closest_node(start_x, start_y)
+        end_node = find_closest_node(end_x, end_y)
+
+        # Calculate the fastest path using the 'travel_time' weight
         route = nx.shortest_path(G, start_node, end_node, weight='travel_time')
+        total_travel_time_seconds = nx.path_weight(G, route, weight='travel_time')
         
+        # Get the coordinates (lat/lon) for each node in the route
         route_coords = [[G.nodes[node]['lat'], G.nodes[node]['lon']] for node in route]
         
         return jsonify({
             "status": "success",
-            "route_coords": route_coords
+            "route_coords": route_coords,
+            "total_time_seconds": total_travel_time_seconds
         }), 200
 
     except nx.NetworkXNoPath:
-        return jsonify({"status": "error", "message": "No valid path found."}), 404
+        return jsonify({"status": "error", "message": "No valid path found. (Check if locations are in the 5km map area)"}), 404
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
