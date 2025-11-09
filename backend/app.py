@@ -25,7 +25,7 @@ else:
     sys.exit("please declare 'SUMO_HOME' as an environment variable")
 
 # --- 3. DEFINE SUMO COMMAND ---
-sumoBinary = "sumo-gui" # FINAL: Run Headless for maximum speed
+sumoBinary = "sumo" # FINAL: Run Headless for maximum speed
 sumo_net_file = "simulation/map.net.xml" 
 sumoConfig = "simulation/map.sumocfg"
 
@@ -193,7 +193,7 @@ def update_live_traffic():
             pass 
 
     print("AI Engine: Background thread stopped.")
-    
+
 
 # --- 7. START THE BACKGROUND THREAD ---
 print("AI Engine: Starting background thread...")
