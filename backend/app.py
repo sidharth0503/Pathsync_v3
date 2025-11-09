@@ -9,6 +9,7 @@ import threading
 import networkx as nx
 import traci
 import sumolib 
+import atexit
 
 # --- 1. CONFIGURE FLASK APP ---
 app = Flask(__name__)
@@ -34,44 +35,67 @@ sumoCmd = [
     "--end", "3600" # Must match the 1-hour simulation length
 ]
 
-# --- 6. LOAD/CREATE YOUR ROUTING GRAPH ---
+# --- 6. LOAD/CREATE YOUR ROUTING GRAPH (FIXED LOGIC) ---
 print("Loading SUMO map into NetworkX graph...")
 
 net = sumolib.net.readNet(sumo_net_file)
 G = nx.MultiDiGraph() 
 edge_id_to_uv = {} # Lookup map for O(n) efficiency
 
-# Add all nodes
-for node in net.getNodes():
+print("Adding routable nodes to graph...")
+# --- 1. ADD NODES FIRST ---
+# This is the correct logic: We must add nodes with their data *before* adding edges.
+# Create a set of all nodes that are part of a 'passenger' (drivable) edge
+routable_nodes = set()
+for edge in net.getEdges():
+    if edge.allows("passenger"):
+        routable_nodes.add(edge.getFromNode())
+        routable_nodes.add(edge.getToNode())
+
+for node in routable_nodes:
     node_id = node.getID()
     x, y = node.getCoord()
     lon, lat = net.convertXY2LonLat(x, y)
+    # This ensures every node in G has its x, y, lon, lat attributes
     G.add_node(node_id, x=x, y=y, lon=lon, lat=lat)
 
-# Add all edges
+print(f"Added {len(G.nodes())} routable nodes.")
+
+# --- 2. NOW, ADD EDGES ---
+print("Adding routable edges to graph...")
+routable_edge_count = 0
 for edge in net.getEdges():
+    if not edge.allows("passenger"):
+        continue
+
     edge_id = edge.getID()
     from_node = edge.getFromNode().getID()
     to_node = edge.getToNode().getID()
-    length = edge.getLength()
-    speed = edge.getSpeed()
-    travel_time = length / speed
     
-    G.add_edge(from_node, to_node, key=edge_id, length=length, travel_time=travel_time)
-    edge_id_to_uv[edge_id] = (from_node, to_node)
+    # We only add edges that connect nodes we've already added
+    if from_node in G and to_node in G:
+        length = edge.getLength()
+        speed = edge.getSpeed()
+        travel_time = length / speed
+        
+        G.add_edge(from_node, to_node, key=edge_id, length=length, travel_time=travel_time)
+        edge_id_to_uv[edge_id] = (from_node, to_node)
+        routable_edge_count += 1
+    
+print(f"NetworkX graph 'G' created successfully with {routable_edge_count} routable edges.")
 
-print("NetworkX graph 'G' created successfully from SUMO net.")
 
-
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION ---
+# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FIXED FOR SPEED AND RUNTIME) ---
 def update_live_traffic():
     """
-    The main "AI Engine" loop. Constantly updates graph with live travel times.
+    (FIXED) The main "AI Engine" loop.
+    - Only updates graph every 10s for speed.
+    - Manually breaks the loop after 3600s.
     """
+    
     print("AI Engine: Background thread started. Attempting to launch and connect...")
     
     try:
-        # Traci handles remote-port and num-clients internally
         traci.start(sumoCmd, port=8813)
         print("AI Engine: SUMO started and Traci connected successfully.")
         
@@ -80,61 +104,113 @@ def update_live_traffic():
         return
 
     # --- This is the main loop ---
-    while True:
-        try:
+    try:
+        while True:
             traci.simulationStep()
             current_time = traci.simulation.getTime()
 
-            # --- DIGITAL TWIN LOGIC (O(n) efficient) ---
-            all_sumo_edges = traci.edge.getIDList()
+            # --- THE RUNTIME FIX ---
+            # We will manually stop the simulation from inside Python
+            if current_time > 3600:
+                print(f"AI Engine: Simulation time {current_time}s > 3600s. Stopping simulation.")
+                break # Exit the 'while True' loop
             
-            for edge_id in all_sumo_edges:
-                current_travel_time = traci.edge.getTraveltime(edge_id) 
-                
-                if edge_id in edge_id_to_uv:
-                    u, v = edge_id_to_uv[edge_id]
-                    # This check ensures that reported incidents (is_incident=True) are NOT overwritten
-                    if G.edges[u, v, edge_id].get('is_incident') != True:
-                        G.edges[u, v, edge_id]['travel_time'] = current_travel_time
-                        
+            # --- THE SPEED FIX (Already in place) ---
             if int(current_time) % 10 == 0:
+            
+                all_sumo_edges = traci.edge.getIDList()
+                
+                for edge_id in all_sumo_edges:
+                    if edge_id in edge_id_to_uv:
+                        u, v = edge_id_to_uv[edge_id]
+                        if G.edges[u, v, edge_id].get('is_incident') != True:
+                            current_travel_time = traci.edge.getTraveltime(edge_id) 
+                            G.edges[u, v, edge_id]['travel_time'] = current_travel_time
+                            
                 print(f"AI Engine: Heartbeat. Sim Time: {current_time}s. Graph weights updated.")
-            
-            # Running non-stop for maximum speed (no time.sleep)
-            
-        except traci.TraCIException as e:
-            print(f"AI Engine: Traci connection error: {e}")
-            try: traci.close()
-            except Exception: pass
-            break
-        
-        except Exception as e:
-            print(f"AI Engine: An unexpected error occurred: {e}")
-            try: traci.close()
-            except Exception: pass
-            break
+
+    except traci.TraCIException as e:
+        # This will catch the error if the simulation stops unexpectedly
+        print(f"AI Engine: Traci connection error (simulation likely ended): {e}")
+    except Exception as e:
+        print(f"AI Engine: An unexpected error occurred: {e}")
+    finally:
+        # This will run after the loop breaks or if an error occurs
+        print("AI Engine: Background thread stopping. Closing Traci connection.")
+        try:
+            traci.close()
+        except Exception:
+            pass # Connection might already be closed
 
     print("AI Engine: Background thread stopped.")
-
 
 # --- 7. START THE BACKGROUND THREAD ---
 print("AI Engine: Starting background thread...")
 ai_thread = threading.Thread(target=update_live_traffic, daemon=True)
 ai_thread.start()
-time.sleep(3) 
+time.sleep(3) # Give SUMO time to boot
 
-# Helper function to find the closest node ID (placed globally for reuse)
+# --- 7. START THE BACKGROUND THREAD ---
+print("AI Engine: Starting background thread...")
+ai_thread = threading.Thread(target=update_live_traffic, daemon=True)
+ai_thread.start()
+time.sleep(3) # Give SUMO time to boot
+
+# --- NEW: Ensure SUMO closes when Flask stops ---
+@atexit.register
+def cleanup_sumo():
+    """
+    This function is automatically called when the Flask app is stopped.
+    """
+    print("Flask server shutting down... closing Traci and SUMO.")
+    try:
+        traci.close()
+    except Exception as e:
+        print(f"Error closing Traci: {e}")
+# -----------------------------------------------
+
+# Helper function to find the closest node ID...
+# (the rest of your code)
+
+# Helper function to find the closest node ID (FIXED and SAFER)
 def find_closest_node(target_x, target_y):
     min_dist = float('inf')
     closest_node_id = None
-    for node in net.getNodes():
-        node_x, node_y = node.getCoord()
-        dist = (target_x - node_x)**2 + (target_y - node_y)**2
+    
+    # Safety check in case graph is empty
+    if not G.nodes():
+        return None
+        
+    # Iterate nodes more efficiently and safely
+    for node_id, node_data in G.nodes(data=True):
+        # This will now work, because G.add_node() guarantees 'x' and 'y' exist
+        dist = (target_x - node_data['x'])**2 + (target_y - node_data['y'])**2
         if dist < min_dist:
             min_dist = dist
-            closest_node_id = node.getID()
+            closest_node_id = node_id
     return closest_node_id
 
+# --- GLOBAL HELPER FUNCTION ---
+def parse_or_geocode(location_string):
+    """
+    Parses a "lat,lon" string or geocodes a location name.
+    Returns (lat, lon) or None.
+    """
+    if ',' in location_string and location_string.count('.') >= 2:
+        try:
+            lat, lon = map(float, location_string.split(','))
+            return (lat, lon)
+        except ValueError:
+            pass  
+            
+    try:
+        location = geolocator.geocode(f"{location_string}, Mysuru, Karnataka", timeout=10)
+        if location:
+            return (location.latitude, location.longitude)
+    except Exception:
+        return None 
+        
+    return None
 
 # --- 8. DEFINE API ENDPOINTS ---
 @app.route('/')
@@ -145,24 +221,9 @@ def index():
 def get_route():
     try:
         data = request.get_json()
-        # ACCEPTS LOCATION NAMES OR COORDINATE STRINGS
         start_name = data['start_name']
         end_name = data['end_name']
 
-        # Helper function to parse coordinates or geocode (shared logic)
-        def parse_or_geocode(location_string):
-            if ',' in location_string and location_string.count('.') >= 2:
-                try:
-                    lat, lon = map(float, location_string.split(','))
-                    return (lat, lon)
-                except ValueError:
-                    pass 
-            location = geolocator.geocode(f"{location_string}, Mysuru, Karnataka", timeout=10)
-            if location:
-                return (location.latitude, location.longitude)
-            return None
-
-        # --- 1. GEOCORING/PARSING ---
         start_loc_data = parse_or_geocode(start_name)
         end_loc_data = parse_or_geocode(end_name)
 
@@ -172,19 +233,18 @@ def get_route():
         start_lat, start_lon = start_loc_data
         end_lat, end_lon = end_loc_data
         
-        # --- 2. ROUTING ---
-        # Convert GPS coords to SUMO's internal (x, y) coords
         start_x, start_y = net.convertLonLat2XY(start_lon, start_lat)
         end_x, end_y = net.convertLonLat2XY(end_lon, end_lat)
 
-        # Find the nearest graph nodes
         start_node = find_closest_node(start_x, start_y)
         end_node = find_closest_node(end_x, end_y)
+        
+        if not start_node or not end_node:
+             return jsonify({"status": "error", "message": "Could not find a routable road near one of the locations."}), 404
 
         route = nx.shortest_path(G, start_node, end_node, weight='travel_time')
         total_travel_time_seconds = nx.path_weight(G, route, weight='travel_time')
         
-        # Get the coordinates (lat/lon) for each node in the route
         route_coords = [[G.nodes[node]['lat'], G.nodes[node]['lon']] for node in route]
         
         return jsonify({
@@ -194,76 +254,84 @@ def get_route():
         }), 200
 
     except nx.NetworkXNoPath:
-        return jsonify({"status": "error", "message": "No valid path found. (Check if locations are in the 5km map area)"}), 404
+        return jsonify({"status": "error", "message": "No valid path found. (The roads may be disconnected or blocked by an incident)"}), 404
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"--- CRITICAL ERROR in /route --- \n{e}\n--- END ERROR ---")
+        return jsonify({"status": "error", "message": "An error occurred on the server during routing."}), 500
 
 
 @app.route('/report', methods=['POST'])
 def report_incident():
     """
-    Accepts an incident location (name or coords) and assigns a high cost to the nearest edge.
-    Simulates Incident Detection (Page 3, ERROR413 - Sidharth S.pdf).
+    (FINAL FIX) Accepts an incident location, finds the nearest drivable edge, 
+    and blocks BOTH directions of that edge.
     """
     data = request.get_json()
     incident_location_name = data.get('location_name', '')
     incident_type = data.get('type', 'Accident')
 
-    # --- 1. GEOCORING ---
+    # --- 1. GEOCORING/PARSING (This part is correct) ---
     try:
-        location = geolocator.geocode(f"{incident_location_name}, Mysuru, Karnataka", timeout=10)
-        
-        if not location:
-            return jsonify({"status": "error", "message": "Location name not recognized for reporting."}), 404
-
-        lat = location.latitude
-        lon = location.longitude
+        loc_data = parse_or_geocode(incident_location_name)
+        if not loc_data:
+            return jsonify({"status": "error", "message": "Location name or coordinate not recognized."}), 404
+        lat, lon = loc_data
         incident_x, incident_y = net.convertLonLat2XY(lon, lat)
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Could not geocode/parse location: {e}"}), 500
 
-    except Exception:
-        return jsonify({"status": "error", "message": "Could not geocode incident location."}), 500
-
-    # --- 2. FIND NEAREST EDGE (Node-to-Edge Search) ---
+    # --- 2. FIND NEAREST EDGE (NOW SAFER AND CORRECTED) ---
     try:
-        # Find the nearest node (intersection) to the incident location
-        nearest_node_id = find_closest_node(incident_x, incident_y)
+        # Get a list of (edge, distance) tuples, sorted by distance
+        nearest_edge_list = net.getNeighboringEdges(incident_x, incident_y, r=200) 
+        if not nearest_edge_list:
+             return jsonify({"status": "error", "message": "Report location is too far from any mapped road."}), 404
         
-        if not nearest_node_id:
-            raise Exception("No nearby nodes found.")
+        nearest_edge_list.sort(key=lambda x: x[1])
 
-        # Iterate over all outgoing edges from that nearest node
-        found_edge_id = None
-        for edge in net.getNode(nearest_node_id).getOutgoing():
-            found_edge_id = edge.getID()
-            break # Take the first outgoing road segment found
+        # Find the *first* edge in the list that is a drivable 'passenger' road
+        edge_to_block = None
+        for edge, dist in nearest_edge_list:
+            if edge.getID() in edge_id_to_uv:
+                edge_to_block = edge # This is the sumolib.net.Edge object
+                break 
         
-        if not found_edge_id:
-            return jsonify({"status": "error", "message": "No outgoing roads found at the intersection node."}), 404
+        if not edge_to_block:
+            return jsonify({"status": "error", "message": "Reported location is on a non-drivable road. Try clicking the middle of a main street."}), 404
             
-        edge_id = found_edge_id
-        u, v = edge_id_to_uv[edge_id] # Get NetworkX nodes
+        # --- 3. APPLY CRITICAL WEIGHT (THE FINAL FIX) ---
+        CRITICAL_COST = 999999 
+        edges_blocked = 0
 
-    except Exception:
-        # Final safety net error message is improved to be instructional
-        return jsonify({"status": "error", "message": "Report location is too far from any mapped road node. Try a more precise street name."}), 404
+        # --- Block the edge itself ---
+        edge_id = edge_to_block.getID()
+        u, v = edge_id_to_uv[edge_id]
+        G[u][v][edge_id]['travel_time'] = CRITICAL_COST
+        G[u][v][edge_id]['is_incident'] = True
+        edges_blocked += 1
+        
+        print(f"INCIDENT: Blocked primary edge {edge_id}")
 
-    # --- 3. APPLY CRITICAL WEIGHT (Incident Detection) ---
-    CRITICAL_COST = 999999 
+        # --- Block the INVERSE edge ---
+        inverse_edge = edge_to_block.getInverse()
+        if inverse_edge and inverse_edge.getID() in edge_id_to_uv:
+            inv_edge_id = inverse_edge.getID()
+            inv_u, inv_v = edge_id_to_uv[inv_edge_id]
+            
+            G[inv_u][inv_v][inv_edge_id]['travel_time'] = CRITICAL_COST
+            G[inv_u][inv_v][inv_edge_id]['is_incident'] = True
+            edges_blocked += 1
+            print(f"INCIDENT: Blocked inverse edge {inv_edge_id}")
 
-    # FIX: Use G[u][v][key] access syntax for MultiDiGraph
-    G[u][v][edge_id]['travel_time'] = CRITICAL_COST
-    G[u][v][edge_id]['is_incident'] = True
-    
-    # Optional: Also apply high cost to the reverse direction if the road is bidirectional
-    reverse_edge_id = "-" + edge_id
-    if reverse_edge_id in edge_id_to_uv:
-        rev_u, rev_v = edge_id_to_uv[reverse_edge_id]
-        G[rev_u][rev_v][reverse_edge_id]['travel_time'] = CRITICAL_COST
-        G[rev_u][rev_v][reverse_edge_id]['is_incident'] = True
+        print(f"INCIDENT DETECTED: {incident_type} reported. {edges_blocked} edge(s) blocked.")
 
-    print(f"INCIDENT DETECTED: {incident_type} reported on edge {edge_id}. Cost set to {CRITICAL_COST}.")
+        return jsonify({
+            "status": "success",
+            "message": f"{incident_type} reported successfully. Routes will now avoid this road."
+        }), 200
 
-    return jsonify({
-        "status": "success",
-        "message": f"{incident_type} reported at {incident_location_name}. Routes will now avoid this road."
-    }), 200
+    except Exception as e:
+        print(f"--- CRITICAL ERROR in /report ---")
+        print(f"Exception: {e}")
+        print(f"--- END ERROR ---")
+        return jsonify({"status": "error", "message": "An unexpected server error occurred."}), 500

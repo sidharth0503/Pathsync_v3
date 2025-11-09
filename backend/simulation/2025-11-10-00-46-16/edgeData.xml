@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2025-11-10 00:48:34 by Eclipse SUMO GUI Version 1.24.0
+<sumoConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file value="C:\Users\sidha\AppData\Local\Programs\Microsoft VS Code\2025-11-10-00-46-16\osm.net.xml.gz"/>
+        <route-files value="C:\Users\sidha\AppData\Local\Programs\Microsoft VS Code\2025-11-10-00-46-16\osm.passenger.trips.xml"/>
+        <additional-files value="C:\Users\sidha\AppData\Local\Programs\Microsoft VS Code\2025-11-10-00-46-16\osm.poly.xml.gz,C:\Users\sidha\AppData\Local\Programs\Microsoft VS Code\2025-11-10-00-46-16\output.add.xml"/>
+    </input>
+
+    <output>
+        <tripinfo-output value="C:\Users\sidha\AppData\Local\Programs\Microsoft VS Code\2025-11-10-00-46-16\tripinfos.xml"/>
+        <statistic-output value="C:\Users\sidha\AppData\Local\Programs\Microsoft VS Code\2025-11-10-00-46-16\stats.xml"/>
+    </output>
+
+    <processing>
+        <ignore-route-errors value="true"/>
+        <tls.actuated.jam-threshold value="30"/>
+    </processing>
+
+    <routing>
+        <device.rerouting.adaptation-steps value="18"/>
+        <device.rerouting.adaptation-interval value="10"/>
+    </routing>
+
+    <report>
+        <verbose value="true"/>
+        <duration-log.statistics value="true"/>
+        <no-step-log value="true"/>
+    </report>
+
+    <gui_only>
+        <gui-settings-file value="C:\Users\sidha\AppData\Local\Programs\Microsoft VS Code\2025-11-10-00-46-16\osm.view.xml"/>
+    </gui_only>
+
+</sumoConfiguration>
+-->
+
+<meandata xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/meandata_file.xsd">
+</meandata>
