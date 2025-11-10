@@ -25,13 +25,14 @@ else:
     sys.exit("please declare 'SUMO_HOME' as an environment variable")
 
 # --- 3. DEFINE SUMO COMMAND ---
-sumoBinary = "sumo" # FINAL: Run Headless for maximum speed
+sumoBinary = "sumo-gui" # FINAL: Run Headless for maximum speed
 sumo_net_file = "simulation/map.net.xml" 
 sumoConfig = "simulation/map.sumocfg"
 
 sumoCmd = [
     sumoBinary,
     "-c", sumoConfig,
+    "--gui-settings-file", "simulation/map.view.xml", # <-- ADD THIS LINE
     "--end", "3600" # Must match the 1-hour simulation length
 ]
 
@@ -85,16 +86,12 @@ for edge in net.getEdges():
 print(f"NetworkX graph 'G' created successfully with {routable_edge_count} routable edges.")
 
 
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FIXED FOR SPEED AND RUNTIME) ---
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FIXED FOR SPEED AND RUNTIME) ---
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL VERSION) ---
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL VERSION) ---
+# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL - "DUAL AI") ---
 def update_live_traffic():
     """
-    (FINAL) The main "AI Engine" loop.
-    - Manually breaks the loop after 3600s.
-    - Implements AI Smart Traffic Light control (with correct phase logic).
-    - Updates graph weights for routing.
+    (FINAL) The main "AI Engine" loop with our most robust DUAL AI:
+    1. AI Signal Manager (Pressure = Cars * WaitTime)
+    2. AI Incident Detector (Detects Halting Queues)
     """
     
     print("AI Engine: Background thread started. Attempting to launch and connect...")
@@ -103,9 +100,13 @@ def update_live_traffic():
         traci.start(sumoCmd, port=8813)
         print("AI Engine: SUMO started and Traci connected successfully.")
         
-        # --- GET ALL TRAFFIC LIGHT IDs ---
         traffic_light_ids = traci.trafficlight.getIDList()
         print(f"AI Engine: Found {len(traffic_light_ids)} traffic lights to manage.")
+        
+        # --- AI INCIDENT DETECTOR STATE ---
+        jam_tracker = {} # Stores how long an edge has been "jammed"
+        JAM_HALT_THRESHOLD = 10 # 10 stopped cars
+        JAM_TIME_THRESHOLD = 30 # 30 seconds
         
     except Exception as e:
         print(f"AI Engine: Failed to launch/connect to Traci: {e}")
@@ -120,66 +121,94 @@ def update_live_traffic():
             # --- 1. RUNTIME FIX ---
             if current_time > 3600:
                 print(f"AI Engine: Simulation time {current_time}s > 3600s. Stopping simulation.")
-                break # Exit the 'while True' loop
+                break 
             
             # --- 2. AI & ROUTING LOGIC (Runs every 10s for speed) ---
             if int(current_time) % 10 == 0:
             
-                # --- NEW: AI SMART TRAFFIC LIGHT LOGIC (CORRECTED) ---
+                # --- AI 1: "PRESSURE" SMART TRAFFIC LIGHT LOGIC ---
                 for tl_id in traffic_light_ids:
-                    # Get all incoming lanes controlled by this light
                     incoming_lanes = set(traci.trafficlight.getControlledLanes(tl_id))
-                    if not incoming_lanes:
-                        continue # Skip if this light controls no lanes
+                    if not incoming_lanes: continue 
 
-                    # Find the lane with the most waiting cars
-                    best_lane = max(incoming_lanes, key=traci.lane.getLastStepHaltingNumber)
+                    # --- "PRESSURE" LOGIC ---
+                    best_lane = ""
+                    max_pressure = -1
+                    for lane in incoming_lanes:
+                        halting_cars = traci.lane.getLastStepHaltingNumber(lane)
+                        wait_time = traci.lane.getWaitingTime(lane)
+                        pressure = halting_cars * wait_time
+                        if pressure > max_pressure:
+                            max_pressure = pressure
+                            best_lane = lane
                     
-                    if traci.lane.getLastStepHaltingNumber(best_lane) == 0:
-                        continue # No cars are waiting, skip this light
-                    
-                    # --- THIS IS THE CRITICAL FIX ---
-                    # Get the full 'program' for the light, which contains *only settable green phases*
-                    logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(tl_id)
-                    if not logic:
+                    if max_pressure == 0:
                         continue
+                    # --- END PRESSURE LOGIC ---
 
-                    # logic[0].phases contains the list of *settable* Phase objects
+                    logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(tl_id)
+                    if not logic: continue
+
                     settable_phases = logic[0].phases
                     controlled_lanes = traci.trafficlight.getControlledLanes(tl_id)
-                    best_phase_index = -1 # This will be the index *of the settable phase* (e.g., 0, 1, 2, 3)
+                    best_phase_index = -1 
 
-                    # Find which of the "green" phases serves our 'best_lane'
                     for i, phase in enumerate(settable_phases):
                         try:
-                            # Find where our 'best_lane' is in the state string
                             lane_index_in_state = controlled_lanes.index(best_lane)
-                            
-                            # Check the state string (e.g., "GrGrGrrr") at that lane's index
                             if lane_index_in_state < len(phase.state):
                                 lane_state = phase.state[lane_index_in_state].lower()
-                                if lane_state == 'g': # 'g' or 'G' means green
-                                    best_phase_index = i # 'i' is the *correct* settable phase index
+                                if lane_state == 'g':
+                                    best_phase_index = i 
                                     break
-                        except Exception:
-                            # This can fail if 'best_lane' isn't in 'controlled_lanes' for some reason
-                            pass 
+                        except Exception: pass 
                     
-                    # If we found a valid green phase and it's not already active, set it.
                     current_phase = traci.trafficlight.getPhase(tl_id)
                     if best_phase_index != -1 and current_phase != best_phase_index:
                         traci.trafficlight.setPhase(tl_id, best_phase_index)
                 
-                # --- OLD: DIGITAL TWIN (Graph Weight Update) ---
+                # --- DIGITAL TWIN (Graph Weight Update) ---
                 all_sumo_edges = traci.edge.getIDList()
                 for edge_id in all_sumo_edges:
                     if edge_id in edge_id_to_uv:
                         u, v = edge_id_to_uv[edge_id]
                         if G.edges[u, v, edge_id].get('is_incident') != True:
-                            current_travel_time = traci.edge.getTraveltime(edge_id) 
-                            G.edges[u, v, edge_id]['travel_time'] = current_travel_time
                             
-                print(f"AI Engine: Heartbeat. Sim Time: {current_time}s. Lights updated. Graph weights updated.")
+                            # --- AI 2: AUTOMATIC INCIDENT DETECTOR (Halting Cars) ---
+                            is_normal_edge = not edge_id.startswith(":") and "#" not in edge_id
+                            
+                            if is_normal_edge:
+                                halting_cars = traci.edge.getLastStepHaltingNumber(edge_id)
+                                
+                                if halting_cars > JAM_HALT_THRESHOLD:
+                                    jam_tracker[edge_id] = jam_tracker.get(edge_id, 0) + 10 
+                                    
+                                    if jam_tracker[edge_id] >= JAM_TIME_THRESHOLD:
+                                        print(f"--- AUTO-INCIDENT: Halting queue detected on edge {edge_id}! Applying CRITICAL_COST. ---")
+                                        G[u][v][edge_id]['travel_time'] = 999999
+                                        G[u][v][edge_id]['is_incident'] = True
+                                        
+                                        # --- SAFE INVERSE EDGE BLOCK ---
+                                        inverse_edge_id = ""
+                                        if edge_id.startswith("-"):
+                                            inverse_edge_id = edge_id[1:]
+                                        else:
+                                            inverse_edge_id = "-" + edge_id
+                                        
+                                        if inverse_edge_id in edge_id_to_uv:
+                                            inv_u, inv_v = edge_id_to_uv[inverse_edge_id]
+                                            G[inv_u][inv_v][inverse_edge_id]['travel_time'] = 999999
+                                            G[inv_u][inv_v][inverse_edge_id]['is_incident'] = True
+                                            print(f"--- AUTO-INCIDENT: Also applied CRITICAL_COST to inverse edge {inverse_edge_id}. ---")
+                                            
+                                else:
+                                    jam_tracker[edge_id] = 0
+                            
+                            if G.edges[u, v, edge_id].get('is_incident') != True:
+                                G.edges[u, v, edge_id]['travel_time'] = traci.edge.getTraveltime(edge_id)
+                                
+            
+                print(f"AI Engine: Heartbeat. Sim Time: {current_time}s. Lights (Pressure) & Detector (Halting) running.")
 
     except traci.TraCIException as e:
         print(f"AI Engine: Traci connection error (simulation likely ended): {e}")
