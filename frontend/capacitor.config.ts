@@ -1,9 +1,15 @@
-import type { CapacitorConfig } from '@capacitor/cli';
+import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'io.ionic.starter',
-  appName: 'frontend',
-  webDir: 'dist'
+  appId: 'com.pathsync.v3',
+  appName: 'Pathsync',
+  webDir: 'dist',
+  // --- ADD THIS BLOCK ---
+  server: {
+    androidScheme: 'http',
+    cleartext: true
+  }
+  // ----------------------
 };
 
 export default config;
