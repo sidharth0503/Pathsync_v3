@@ -25,7 +25,7 @@ else:
     sys.exit("please declare 'SUMO_HOME' as an environment variable")
 
 # --- 3. DEFINE SUMO COMMAND ---
-sumoBinary = "sumo-gui" # FINAL: Run Headless for maximum speed
+sumoBinary = "sumo" # FINAL: Run Headless for maximum speed
 sumo_net_file = "simulation/map.net.xml" 
 sumoConfig = "simulation/map.sumocfg"
 
@@ -324,13 +324,16 @@ def get_route():
 
         route = nx.shortest_path(G, start_node, end_node, weight='travel_time')
         total_travel_time_seconds = nx.path_weight(G, route, weight='travel_time')
+
+        total_distance_meters = nx.path_weight(G, route, weight='length')
         
         route_coords = [[G.nodes[node]['lat'], G.nodes[node]['lon']] for node in route]
         
         return jsonify({
             "status": "success",
             "route_coords": route_coords,
-            "total_time_seconds": total_travel_time_seconds
+            "total_time_seconds": total_travel_time_seconds,
+            "total_distance_meters": total_distance_meters
         }), 200
 
     except nx.NetworkXNoPath:
@@ -343,7 +346,7 @@ def get_route():
 @app.route('/report', methods=['POST'])
 def report_incident():
     """
-    (FINAL FIX) Accepts an incident location, finds the nearest drivable edge, 
+    (FIXED) Accepts an incident location, finds the nearest drivable edge, 
     and blocks BOTH directions of that edge.
     """
     data = request.get_json()
@@ -360,48 +363,50 @@ def report_incident():
     except Exception as e:
         return jsonify({"status": "error", "message": f"Could not geocode/parse location: {e}"}), 500
 
-    # --- 2. FIND NEAREST EDGE (NOW SAFER AND CORRECTED) ---
+    # --- 2. FIND NEAREST EDGE (This part is correct) ---
     try:
-        # Get a list of (edge, distance) tuples, sorted by distance
         nearest_edge_list = net.getNeighboringEdges(incident_x, incident_y, r=200) 
         if not nearest_edge_list:
              return jsonify({"status": "error", "message": "Report location is too far from any mapped road."}), 404
-        
+
         nearest_edge_list.sort(key=lambda x: x[1])
 
-        # Find the *first* edge in the list that is a drivable 'passenger' road
         edge_to_block = None
         for edge, dist in nearest_edge_list:
             if edge.getID() in edge_id_to_uv:
-                edge_to_block = edge # This is the sumolib.net.Edge object
+                edge_to_block = edge 
                 break 
-        
+
         if not edge_to_block:
             return jsonify({"status": "error", "message": "Reported location is on a non-drivable road. Try clicking the middle of a main street."}), 404
-            
-        # --- 3. APPLY CRITICAL WEIGHT (THE FINAL FIX) ---
+
+        # --- 3. APPLY CRITICAL WEIGHT (THE FIX) ---
         CRITICAL_COST = 999999 
         edges_blocked = 0
 
-        # --- Block the edge itself ---
         edge_id = edge_to_block.getID()
-        u, v = edge_id_to_uv[edge_id]
-        G[u][v][edge_id]['travel_time'] = CRITICAL_COST
-        G[u][v][edge_id]['is_incident'] = True
-        edges_blocked += 1
-        
-        print(f"INCIDENT: Blocked primary edge {edge_id}")
 
-        # --- Block the INVERSE edge ---
-        inverse_edge = edge_to_block.getInverse()
-        if inverse_edge and inverse_edge.getID() in edge_id_to_uv:
-            inv_edge_id = inverse_edge.getID()
-            inv_u, inv_v = edge_id_to_uv[inv_edge_id]
-            
-            G[inv_u][inv_v][inv_edge_id]['travel_time'] = CRITICAL_COST
-            G[inv_u][inv_v][inv_edge_id]['is_incident'] = True
+        # --- Block the primary edge ---
+        if edge_id in edge_id_to_uv:
+            u, v = edge_id_to_uv[edge_id]
+            G[u][v][edge_id]['travel_time'] = CRITICAL_COST
+            G[u][v][edge_id]['is_incident'] = True
             edges_blocked += 1
-            print(f"INCIDENT: Blocked inverse edge {inv_edge_id}")
+            print(f"INCIDENT (Manual): Blocked primary edge {edge_id}")
+
+        # --- Block the INVERSE edge (using SAFE string logic) ---
+        inverse_edge_id = ""
+        if edge_id.startswith("-"):
+            inverse_edge_id = edge_id[1:]
+        else:
+            inverse_edge_id = "-" + edge_id
+
+        if inverse_edge_id in edge_id_to_uv:
+            inv_u, inv_v = edge_id_to_uv[inverse_edge_id]
+            G[inv_u][inv_v][inverse_edge_id]['travel_time'] = CRITICAL_COST
+            G[inv_u][inv_v][inverse_edge_id]['is_incident'] = True
+            edges_blocked += 1
+            print(f"INCIDENT (Manual): Also blocked inverse edge {inverse_edge_id}")
 
         print(f"INCIDENT DETECTED: {incident_type} reported. {edges_blocked} edge(s) blocked.")
 
