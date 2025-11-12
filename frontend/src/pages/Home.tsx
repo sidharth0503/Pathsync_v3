@@ -363,7 +363,7 @@ const Home: React.FC = () => {
             <img 
               src={LOGO_DATA_URL} 
               alt="Pathsync Logo" 
-              style={{ height: '70px', width: 'auto', margin: '0 auto 15px', display: 'block' }}
+              style={{ height: '150px', width: 'auto', margin: '0 auto 15px', display: 'block' }}
               onError={(e) => {
                 const target = e.target as HTMLImageElement;
                 target.onerror = null; 

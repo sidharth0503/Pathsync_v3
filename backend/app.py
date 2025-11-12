@@ -230,12 +230,6 @@ ai_thread = threading.Thread(target=update_live_traffic, daemon=True)
 ai_thread.start()
 time.sleep(3) # Give SUMO time to boot
 
-# --- 7. START THE BACKGROUND THREAD ---
-print("AI Engine: Starting background thread...")
-ai_thread = threading.Thread(target=update_live_traffic, daemon=True)
-ai_thread.start()
-time.sleep(3) # Give SUMO time to boot
-
 # --- NEW: Ensure SUMO closes when Flask stops ---
 @atexit.register
 def cleanup_sumo():
@@ -346,8 +340,8 @@ def get_route():
 @app.route('/report', methods=['POST'])
 def report_incident():
     """
-    (FIXED) Accepts an incident location, finds the nearest drivable edge, 
-    and blocks BOTH directions of that edge.
+    (FIXED) Accepts an incident location, blocks it in the routing graph (NetworkX),
+    AND blocks it in the live simulation (SUMO/Traci).
     """
     data = request.get_json()
     incident_location_name = data.get('location_name', '')
@@ -368,7 +362,7 @@ def report_incident():
         nearest_edge_list = net.getNeighboringEdges(incident_x, incident_y, r=200) 
         if not nearest_edge_list:
              return jsonify({"status": "error", "message": "Report location is too far from any mapped road."}), 404
-
+        
         nearest_edge_list.sort(key=lambda x: x[1])
 
         edge_to_block = None
@@ -376,21 +370,26 @@ def report_incident():
             if edge.getID() in edge_id_to_uv:
                 edge_to_block = edge 
                 break 
-
+        
         if not edge_to_block:
             return jsonify({"status": "error", "message": "Reported location is on a non-drivable road. Try clicking the middle of a main street."}), 404
-
-        # --- 3. APPLY CRITICAL WEIGHT (THE FIX) ---
+            
+        # --- 3. APPLY CRITICAL WEIGHT & SIMULATION BLOCK ---
         CRITICAL_COST = 999999 
         edges_blocked = 0
-
+        
         edge_id = edge_to_block.getID()
 
         # --- Block the primary edge ---
         if edge_id in edge_id_to_uv:
             u, v = edge_id_to_uv[edge_id]
+            # 1. Block for APP REROUTING (NetworkX)
             G[u][v][edge_id]['travel_time'] = CRITICAL_COST
             G[u][v][edge_id]['is_incident'] = True
+            
+            # 2. Block for SIMULATION (SUMO/Traci)
+            traci.edge.setMaxSpeed(edge_id, 0.1) # <-- NEW LINE
+            
             edges_blocked += 1
             print(f"INCIDENT (Manual): Blocked primary edge {edge_id}")
 
@@ -400,11 +399,16 @@ def report_incident():
             inverse_edge_id = edge_id[1:]
         else:
             inverse_edge_id = "-" + edge_id
-
+        
         if inverse_edge_id in edge_id_to_uv:
             inv_u, inv_v = edge_id_to_uv[inverse_edge_id]
+            # 1. Block for APP REROUTING (NetworkX)
             G[inv_u][inv_v][inverse_edge_id]['travel_time'] = CRITICAL_COST
             G[inv_u][inv_v][inverse_edge_id]['is_incident'] = True
+            
+            # 2. Block for SIMULATION (SUMO/Traci)
+            traci.edge.setMaxSpeed(inverse_edge_id, 0.1) # <-- NEW LINE
+            
             edges_blocked += 1
             print(f"INCIDENT (Manual): Also blocked inverse edge {inverse_edge_id}")
 
