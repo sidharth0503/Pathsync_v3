@@ -16,7 +16,7 @@
     color: #00ff00; /* Green text */
     font-family: 'Courier New', Courier, monospace;
     font-size: 0.85rem;
-    height: 300px; /* *** REDUCED HEIGHT to fit new layout *** */
+    height: 300px; /* REDUCED HEIGHT to fit new layout */
     overflow-y: scroll; /* Add a scrollbar */
     padding: 10px;
     border-radius: 5px;
@@ -37,4 +37,16 @@
 /* Cursor style when in "Resolve Incident" mode */
 #map.resolving-incident {
     cursor: help; /* A 'help' cursor indicates you can interact */
+}
+
+/* --- NEW: Style for the SVG traffic light icons --- */
+.traffic-light-icon {
+    /* Remove Leaflet's default white box */
+    background: transparent;
+    border: none;
+}
+
+.traffic-light-svg {
+    /* Add the "stand out" shadow */
+    filter: drop-shadow(1px 1px 2px rgba(0,0,0,0.7));
 }
