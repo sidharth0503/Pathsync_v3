@@ -131,10 +131,12 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchDashboardData(); // Fetch live map data
     fetchLogs(); // Fetch log data
     fetchIncidentHistory(); // <-- NEW: Fetch history data
+    fetchStatusData(); // <-- NEW: Fetch latency on load
     
     setInterval(fetchDashboardData, 5000); 
     setInterval(fetchLogs, 3000); 
     setInterval(fetchIncidentHistory, 5000); // <-- NEW: Refresh history
+    setInterval(fetchStatusData, 2000); // <-- NEW: Poll latency every 2 seconds
 });
 
 
@@ -199,6 +201,41 @@ function updateHistoryChart(timestamps) {
     incidentHistoryChart.update();
 }
 
+/**
+ * --- NEW: Fetches the latest system status (e.g., latency) ---
+ */
+async function fetchStatusData() {
+    try {
+        const response = await fetch(`${BACKEND_URL}/status`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        if (data.status === 'success') {
+            updateLatencyStat(data.traci_latency_ms);
+        }
+    } catch (error) {
+        console.error('Failed to fetch status data:', error);
+        updateLatencyStat(null); // Show an error state
+    }
+}
+
+/**
+ * --- NEW: Updates the latency stat card in the DOM. ---
+ */
+function updateLatencyStat(latency) {
+    const statElement = document.getElementById('latency-stat');
+    if (!statElement) return;
+
+    if (latency === null || typeof latency === 'undefined') {
+        statElement.textContent = 'N/A';
+        statElement.classList.add('text-danger'); // Show an error
+    } else {
+        statElement.textContent = latency.toFixed(2);
+        statElement.classList.remove('text-danger');
+    }
+}
+
 
 /**
  * Fetches the latest logs from the backend.
@@ -223,7 +260,7 @@ async function fetchLogs() {
 function updateLogBox(logs) {
     if (logBox) {
         logBox.textContent = logs.join('\n');
-        logBox.scrollTop = logBox.scrollHeight;
+        logBox.scrollTop = logA.scrollHeight;
     }
 }
 
