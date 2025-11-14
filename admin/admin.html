@@ -34,14 +34,14 @@
             <!-- Column 1: Stats & Logs -->
             <div class="col-lg-4">
                 
-                <!-- Simplified Incident Card -->
+                <!-- *** NEW: Incident History Chart *** -->
                 <div class="card shadow-sm mb-4">
                     <div class="card-header bg-danger text-white">
-                        <i class="bi bi-cone-striped me-2"></i>Live Incident Report
+                        <i class="bi bi-clock-history me-2"></i>Incident History (Last 10)
                     </div>
-                    <div class="card-body text-center">
-                        <h1 id="incidents-stat" class="fw-bold display-4">0</h1>
-                        <p class="text-muted mb-0">Active Incidents</p>
+                    <div class="card-body">
+                        <!-- Canvas for the new chart -->
+                        <canvas id="history-chart"></canvas>
                     </div>
                 </div>
 
@@ -73,7 +73,7 @@
                                 <label class="form-check-label" for="heatmap-toggle">Toggle heatmap</label>
                             </div>
                             
-                            <!-- *** NEW: Create Incident Toggle Switch *** -->
+                            <!-- Create Incident Toggle Switch -->
                             <div class="form-check form-switch">
                                 <input class="form-check-input bg-danger" type="checkbox" role="switch" id="create-incident-toggle">
                                 <label class="form-check-label" for="create-incident-toggle">Create Incident</label>
@@ -91,9 +91,9 @@
 
     <!-- JavaScript Libraries -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
-    <!-- Leaflet.heat plugin -->
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <!-- Chart.js (already here from before) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     
     <!-- Our custom JS -->
     <script src="admin.js"></script>

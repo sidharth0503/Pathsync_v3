@@ -20,11 +20,14 @@ geolocator = Nominatim(user_agent="pathsync-v3-router")
 
 # --- GLOBAL STATE FOR ADMIN DASHBOARD ---
 ADMIN_STATE = {
-    "edge_heatmap_data": [], # <-- NEW: For heatmap
+    "traffic_lights": {}, 
     "total_routes_calculated": 0, 
     "total_incidents_reported": 0 
 }
-# ----------------------------------------
+# --- NEW: INCIDENT HISTORY ---
+INCIDENT_HISTORY = []
+history_lock = threading.Lock()
+# -----------------------------
 
 # --- THREAD-SAFE LOGGING SETUP ---
 log_queue = deque(maxlen=50) 
@@ -64,7 +67,7 @@ else:
     sys.exit("please declare 'SUMO_HOME' as an environment variable")
 
 # --- 3. DEFINE SUMO COMMAND ---
-sumoBinary = "sumo" 
+sumoBinary = "sumo-gui" # <-- Kept as sumo-gui for debugging
 sumo_net_file = "simulation/map.net.xml" 
 sumoConfig = "simulation/map.sumocfg"
 
@@ -101,9 +104,14 @@ for edge in net.getEdges():
     if from_node in G and to_node in G:
         length = edge.getLength()
         speed = edge.getSpeed()
-        travel_time = length / (speed + 0.001) 
+        original_travel_time = length / (speed + 0.001) # Store original
         
-        G.add_edge(from_node, to_node, key=edge_id, length=length, travel_time=travel_time, original_travel_time=travel_time) # <-- Store original time
+        G.add_edge(
+            from_node, to_node, key=edge_id, 
+            length=length, 
+            travel_time=original_travel_time,
+            original_travel_time=original_travel_time # <-- NEW
+        )
         edge_id_to_uv[edge_id] = (from_node, to_node)
         routable_edge_count += 1
     
@@ -111,11 +119,11 @@ app.logger.info(f"NetworkX graph 'G' created successfully with {routable_edge_co
 # --- END OF GRAPH LOADING FIX ---
 
 
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (SIMPLIFIED) ---
+# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL - "DUAL AI") ---
 def update_live_traffic():
     """
-    (FINAL - HEATMAP READY) The main "AI Engine" loop.
-    Generates heatmap data and runs the Incident Detector AI.
+    (FINAL - ADMIN READY) The main "AI Engine" loop.
+    Populates ADMIN_STATE for the dashboard and is fully thread-safe.
     """
     
     app.logger.info("AI Engine: Background thread started. Attempting to launch and connect...")
@@ -151,9 +159,8 @@ def update_live_traffic():
             
                 # --- AI 1: "PRESSURE" SMART TRAFFIC LIGHT LOGIC (REMOVED) ---
                 
-                # --- DIGITAL TWIN (Graph Weight Update) & NEW HEATMAP DATA ---
-                
-                new_heatmap_data = [] # Create a temporary list for thread-safety
+                # --- DIGITAL TWIN (Graph Weight Update) ---
+                edge_heatmap_data = [] # For the heatmap
 
                 all_sumo_edges = traci.edge.getIDList()
                 for edge_id in all_sumo_edges:
@@ -204,27 +211,20 @@ def update_live_traffic():
                             if G.edges[u, v, edge_id].get('is_incident') != True:
                                 current_travel_time = traci.edge.getTraveltime(edge_id)
                                 G.edges[u, v, edge_id]['travel_time'] = current_travel_time
-                                
-                                # --- NEW HEATMAP LOGIC ---
-                                original_travel_time = G.edges[u, v, edge_id]['original_travel_time']
-                                
-                                # Intensity = how much *worse* is the traffic? (min of 0.1)
-                                intensity = max(0.1, current_travel_time / (original_travel_time + 0.1))
 
-                                # Get location of the start of the edge
-                                node_data = G.nodes[u] 
-                                new_heatmap_data.append({
+                                # --- NEW: Add data for heatmap ---
+                                original_time = G.edges[u, v, edge_id]['original_travel_time']
+                                intensity = current_travel_time / (original_time + 0.001) # +0.001 to avoid zero division
+                                node_data = G.nodes[u] # Get coords of the start node
+                                edge_heatmap_data.append({
                                     "lat": node_data['lat'],
                                     "lon": node_data['lon'],
                                     "intensity": intensity
                                 })
-                                # --- END HEATMAP LOGIC ---
 
-                # --- END OF LOOP ---
+                # --- NEW: Update the global state with heatmap data ---
+                ADMIN_STATE["edge_heatmap_data"] = edge_heatmap_data
                 
-                # Now, safely update the global state
-                ADMIN_STATE["edge_heatmap_data"] = new_heatmap_data
-
                 # --- AI HEARTBEAT NOW GOES TO ADMIN LOG ---
                 app.logger.info(f"AI Engine: Heartbeat. Sim Time: {current_time}s.")
 
@@ -387,8 +387,9 @@ def report_incident():
         if not edge_to_block:
             return jsonify({"status": "error", "message": "Reported location is on a non-drivable road. Try clicking the middle of a main street."}), 404
             
-        # --- ADDED INCIDENT COUNTER ---
-        ADMIN_STATE["total_incidents_reported"] += 1
+        # --- NEW: Add timestamp to history ---
+        with history_lock:
+            INCIDENT_HISTORY.append(time.time())
 
         # --- 3. APPLY CRITICAL WEIGHT (THREAD-SAFE) ---
         CRITICAL_COST = 999999 
@@ -443,19 +444,15 @@ def get_dashboard_data():
     except Exception as e:
         app.logger.error(f"Error reading graph incidents: {e}")
 
-    # 2. Get traffic light data (REMOVED)
-    lights = []
-
-    # 3. Get heatmap data
-    heatmap_data = ADMIN_STATE["edge_heatmap_data"]
+    # 2. Get heatmap data (from AI thread)
+    heatmap_data = ADMIN_STATE.get("edge_heatmap_data", [])
 
     return jsonify({
         "stats": {
-            # "total_routes_calculated" has been removed
-            "total_incidents_reported": ADMIN_STATE["total_incidents_reported"]
+            "total_incidents_reported": len(INCIDENT_HISTORY) # Use history length
         },
         "incidents": incidents,
-        "edge_heatmap_data": heatmap_data # <-- NEW
+        "edge_heatmap_data": heatmap_data # Send heatmap data
     })
 
 # --- NEW LOGGING ENDPOINT ---
@@ -465,6 +462,14 @@ def get_logs():
     with log_lock:
         logs = list(log_queue)
     return jsonify({"logs": logs})
+
+# --- NEW HISTORY ENDPOINT ---
+@app.route('/admin/incident_history')
+def get_incident_history():
+    """Returns the list of incident timestamps."""
+    with history_lock:
+        history = list(INCIDENT_HISTORY)
+    return jsonify({"history": history})
 
 
 @app.route('/admin/unblock_edge', methods=['POST'])
@@ -522,7 +527,7 @@ def serve_admin_page():
 def serve_admin_static(filename):
     return send_from_directory(os.path.join(os.path.dirname(__file__), '..', 'admin'), filename)
 
-# ==========================================================
+# =================================S=========================
     
 if __name__ == '__main__':
     # --- ADDED LOG HANDLER TO FLASK APP ---

@@ -6,26 +6,24 @@
 const BACKEND_URL = 'http://127.0.0.1:5000';
 let map;
 let incidentLayerGroup;
-let heatmapLayer; // For our heatmap
+let heatmapLayer;
 let logBox;
-let isCreatingIncident = false; // NEW: State for incident creation
+let incidentHistoryChart; // <-- NEW: Chart variable
+let isCreatingIncident = false; 
 
-// Wait for the HTML document to load before running our code
 document.addEventListener('DOMContentLoaded', () => {
     
     console.log('Admin Dashboard Loaded. Initializing...');
 
-    // Grab the log box element
     logBox = document.getElementById('log-box');
     
     // 1. Initialize Map
-    const mapContainer = document.getElementById('map'); // Get map container
+    const mapContainer = document.getElementById('map');
     map = L.map(mapContainer).setView([12.30, 76.60], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="http://osm.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
 
-    // Create a layer group to hold incident markers
     incidentLayerGroup = L.layerGroup().addTo(map);
 
     // 2. Initialize Heatmap Layer
@@ -40,7 +38,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     console.log('Map and Heatmap initialized successfully');
 
-    // 3. Set up Toggle Switches
+    // 3. --- NEW: Initialize Incident History Chart ---
+    const historyCtx = document.getElementById('history-chart').getContext('2d');
+    incidentHistoryChart = new Chart(historyCtx, {
+        type: 'line',
+        data: {
+            labels: [], // Will be timestamps (e.g., "19:15:05")
+            datasets: [{
+                label: 'Incidents Reported',
+                data: [], // Will be a cumulative count (e.g., 1, 2, 3)
+                backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                borderColor: 'rgba(220, 53, 69, 1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        stepSize: 1 // Only show whole numbers (1, 2, 3)
+                    }
+                }
+            }
+        }
+    });
+    console.log('Incident History chart initialized');
+
+    // 4. Set up Toggle Switches
     const heatmapToggle = document.getElementById('heatmap-toggle');
     const createIncidentToggle = document.getElementById('create-incident-toggle');
 
@@ -54,7 +81,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- NEW: Create Incident Toggle Logic ---
     createIncidentToggle.addEventListener('change', () => {
         isCreatingIncident = createIncidentToggle.checked;
         if (isCreatingIncident) {
@@ -66,31 +92,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- NEW: Map Click Listener for Creating Incidents ---
     map.on('click', (e) => {
-        // Only run if the create incident toggle is on
         if (isCreatingIncident) {
             const { lat, lng } = e.latlng;
             console.log(`Map clicked in create mode: ${lat}, ${lng}`);
             
-            // Ask for confirmation
             if (confirm(`Create new incident at ${lat.toFixed(4)}, ${lng.toFixed(4)}?`)) {
                 createIncident(`${lat},${lng}`);
             }
             
-            // Turn off the toggle after clicking
             createIncidentToggle.checked = false;
             isCreatingIncident = false;
             mapContainer.classList.remove('creating-incident');
         }
     });
     
-    // 4. Start fetching data
-    fetchDashboardData(); // Fetch immediately on load
-    fetchLogs(); // Fetch logs on load
+    // 5. Start fetching data
+    fetchDashboardData(); // Fetch live map data
+    fetchLogs(); // Fetch log data
+    fetchIncidentHistory(); // <-- NEW: Fetch history data
     
-    setInterval(fetchDashboardData, 5000); // Then fetch every 5 seconds
-    setInterval(fetchLogs, 3000); // Fetch logs every 3 seconds
+    setInterval(fetchDashboardData, 5000); 
+    setInterval(fetchLogs, 3000); 
+    setInterval(fetchIncidentHistory, 5000); // <-- NEW: Refresh history
 });
 
 
@@ -105,16 +129,11 @@ async function fetchDashboardData() {
         }
         const data = await response.json();
 
-        // console.log('Received data:', data); // Uncomment for debugging
-
-        // --- 1. Update Stats ---
-        updateStats(data.incidents); // Pass incidents for live count
-
-        // --- 2. Update Map with Incidents ---
+        // --- 1. Update Map with Incidents ---
         updateMap(data.incidents); 
-
-        // --- 3. Update Heatmap ---
+        // --- 2. Update Heatmap ---
         updateHeatmap(data.edge_heatmap_data);
+        // --- 3. (REMOVED) updateStats ---
 
     } catch (error) {
         console.error('Failed to fetch dashboard data:', error);
@@ -122,16 +141,50 @@ async function fetchDashboardData() {
 }
 
 /**
- * Updates the stat cards safely.
+ * --- NEW: Fetches the incident history from the backend. ---
  */
-function updateStats(incidents) {
-    const incidentsStat = document.getElementById('incidents-stat');
+async function fetchIncidentHistory() {
+    try {
+        const response = await fetch(`${BACKEND_URL}/admin/incident_history`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const histData = await response.json();
+        updateHistoryChart(histData.history);
 
-    if (incidentsStat) {
-        // Use the LIVE count from the incidents array length
-        incidentsStat.textContent = incidents?.length ?? 0;
+    } catch (error) {
+        console.error('Failed to fetch incident history:', error);
     }
 }
+
+/**
+ * --- NEW: Updates the incident history line chart. ---
+ */
+function updateHistoryChart(timestamps) {
+    if (!incidentHistoryChart) return;
+
+    // Take only the last 10 incidents for a clean chart
+    const lastTenTimestamps = timestamps.slice(-10);
+
+    // Process the timestamps into labels and data
+    const labels = lastTenTimestamps.map(ts => 
+        new Date(ts * 1000).toLocaleTimeString('en-US', {
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: false
+        })
+    );
+    
+    // Create a cumulative count (1, 2, 3...)
+    const data = lastTenTimestamps.map((_, index) => index + 1);
+
+    // Update the chart
+    incidentHistoryChart.data.labels = labels;
+    incidentHistoryChart.data.datasets[0].data = data;
+    incidentHistoryChart.update();
+}
+
 
 /**
  * Fetches the latest logs from the backend.
@@ -155,9 +208,7 @@ async function fetchLogs() {
  */
 function updateLogBox(logs) {
     if (logBox) {
-        // Join all log messages with a newline and update
         logBox.textContent = logs.join('\n');
-        // Automatically scroll to the bottom
         logBox.scrollTop = logBox.scrollHeight;
     }
 }
@@ -167,9 +218,8 @@ function updateLogBox(logs) {
  * Updates the map with live incident markers.
  */
 function updateMap(incidents) {
-    incidentLayerGroup.clearLayers(); // Clear all old markers
+    incidentLayerGroup.clearLayers(); 
 
-    // Define a custom red icon for incidents
     const redIcon = L.icon({
         iconUrl: 'https://cdn.rawgit.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
         shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
@@ -182,7 +232,6 @@ function updateMap(incidents) {
     incidents.forEach(incident => {
         const latLon = [incident.lat, incident.lon];
         
-        // Create the HTML for the popup
         const popupContent = `
             <div style="padding: 5px;">
                 <strong><i class="bi bi-cone-striped"></i> Active Incident</strong><br>
@@ -194,7 +243,6 @@ function updateMap(incidents) {
             </div>
         `;
 
-        // Create the marker and add it to our layer group
         const marker = L.marker(latLon, { icon: redIcon })
             .bindPopup(popupContent);
         
@@ -211,16 +259,12 @@ function updateHeatmap(heatmapData) {
         return;
     }
 
-    // Convert our edge data into [lat, lon, intensity] points
     const heatPoints = heatmapData.map(edge => {
-        // Intensity = how much *worse* is the traffic? (min of 0.1)
-        // We cap it at 5x to prevent one-hotspot-takes-all
         const intensity = Math.min(edge.intensity, 5); 
         return [edge.lat, edge.lon, intensity];
     });
 
     heatmapLayer.setLatLngs(heatPoints);
-    // console.log(`Heatmap updated with ${heatPoints.length} points.`);
 }
 
 
@@ -232,9 +276,7 @@ async function unblockEdge(edge_id) {
     try {
         const response = await fetch(`${BACKEND_URL}/admin/unblock_edge`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ edge_id: edge_id })
         });
 
@@ -242,8 +284,9 @@ async function unblockEdge(edge_id) {
 
         if (response.ok && result.status === 'success') {
             alert('Edge unblocked successfully! Refreshing data.');
-            map.closePopup(); // Close the popup
-            fetchDashboardData(); // Manually trigger a refresh to update the map
+            map.closePopup(); 
+            fetchDashboardData(); 
+            fetchIncidentHistory(); // <-- NEW: Refresh history chart too
         } else {
             alert(`Failed to unblock edge: ${result.message}`);
         }
@@ -252,18 +295,15 @@ async function unblockEdge(edge_id) {
         alert('An error occurred while trying to unblock the edge.');
     }
 }
-// Attach to the window object so the HTML 'onclick' can find it
 window.unblockEdge = unblockEdge;
 
-// --- *** NEW FUNCTION: Create Incident *** ---
+// --- NEW FUNCTION: Create Incident ---
 async function createIncident(location_name) {
     console.log(`Creating new incident at: ${location_name}`);
     try {
         const response = await fetch(`${BACKEND_URL}/report`, { // Use the EXISTING /report endpoint
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
                 location_name: location_name,
                 type: 'Admin Incident' // Send a specific type
@@ -274,7 +314,8 @@ async function createIncident(location_name) {
 
         if (response.ok && result.status === 'success') {
             alert('Incident created successfully! Refreshing data.');
-            fetchDashboardData(); // Instantly refresh the map to show the new marker
+            fetchDashboardData(); // Instantly refresh the map
+            fetchIncidentHistory(); // <-- NEW: Refresh history chart too
         } else {
             alert(`Failed to create incident: ${result.message}`);
         }
@@ -283,4 +324,3 @@ async function createIncident(location_name) {
         alert('An error occurred while creating the incident.');
     }
 }
-// This function doesn't need to be on the window object
