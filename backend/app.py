@@ -17,6 +17,7 @@ from collections import deque
 app = Flask(__name__)
 CORS(app) 
 geolocator = Nominatim(user_agent="pathsync-v3-router")
+g_traci_latency_ms = 0.0 # <-- NEW: Global for latency
 
 # --- GLOBAL STATE FOR ADMIN DASHBOARD ---
 ADMIN_STATE = {
@@ -125,6 +126,7 @@ def update_live_traffic():
     (FINAL - ADMIN READY) The main "AI Engine" loop.
     Populates ADMIN_STATE for the dashboard and is fully thread-safe.
     """
+    global g_traci_latency_ms # <-- NEW: Get global latency var
     
     app.logger.info("AI Engine: Background thread started. Attempting to launch and connect...")
     
@@ -147,7 +149,21 @@ def update_live_traffic():
     try:
         while True:
             traci.simulationStep()
-            current_time = traci.simulation.getTime()
+            
+            # --- NEW: LATENCY MEASUREMENT ---
+            start_t = time.time()
+            current_time = traci.simulation.getTime() # This is our "ping"
+            end_t = time.time()
+            
+            current_latency_ms = (end_t - start_t) * 1000
+            
+            # Apply smoothing (Exponential Moving Average)
+            if g_traci_latency_ms == 0.0:
+                g_traci_latency_ms = current_latency_ms # Initialize
+            else:
+                g_traci_latency_ms = (0.1 * current_latency_ms) + (0.9 * g_traci_latency_ms)
+            # --- END OF LATENCY MEASUREMENT ---
+
 
             # --- 1. RUNTIME FIX ---
             if current_time > 3600:
@@ -288,7 +304,7 @@ def parse_or_geocode(location_string):
             return (lat, lon)
         except ValueError:
             pass  
-            
+        
     try:
         location = geolocator.geocode(f"{location_string}, Mysuru, Karnataka", timeout=10)
         if location:
@@ -512,6 +528,18 @@ def unblock_edge():
         app.logger.error(f"Error unblocking edge: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# --- NEW: LATENCY ENDPOINT ---
+@app.route('/status')
+def get_status():
+    """
+    Provides live status, including Traci-SUMO command latency.
+    """
+    global g_traci_latency_ms
+    return jsonify({
+        "status": "success",
+        "traci_latency_ms": g_traci_latency_ms
+    }), 200
+
 # ==========================================================
 # --- ROUTES TO SERVE THE ADMIN WEB PAGE ---
 # ==========================================================
@@ -527,7 +555,7 @@ def serve_admin_page():
 def serve_admin_static(filename):
     return send_from_directory(os.path.join(os.path.dirname(__file__), '..', 'admin'), filename)
 
-# =================================S=========================
+# ==========================================================
     
 if __name__ == '__main__':
     # --- ADDED LOG HANDLER TO FLASK APP ---
