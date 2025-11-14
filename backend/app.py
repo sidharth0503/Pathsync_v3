@@ -558,16 +558,7 @@ def serve_admin_static(filename):
 # ==========================================================
     
 if __name__ == '__main__':
-    # --- ADDED LOG HANDLER TO FLASK APP ---
-    # We get all loggers and add our handler
-    for logger in (
-        app.logger,
-        logging.getLogger('werkzeug'), # Captures server requests
-        root_logger, # Root logger
-    ):
-        # Remove default handlers if they exist
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-        logger.addHandler(admin_handler)
-    # -------------------------------------
+    # --- THIS BLOCK IS NOW CLEAN ---
+    # The logging setup at the top of the file (lines 31-47)
+    # is all that is needed.
     app.run(debug=True, host='0.0.0.0', port=5000)
