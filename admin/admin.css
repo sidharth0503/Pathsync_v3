@@ -1,0 +1,35 @@
+/*
+ * admin.css
+ * This file adds our custom styles.
+ */
+
+/* Give the map a defined height so it's visible */
+#map {
+    height: 75vh; /* 75% of the viewport height */
+    min-height: 500px;
+    border-radius: 0 0 .375rem .375rem; /* Match the card's bottom corners */
+}
+
+/* Style for the log box */
+#log-box {
+    background-color: #212529; /* Dark background */
+    color: #00ff00; /* Green text */
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.85rem;
+    height: 500px; /* Increased height */
+    overflow-y: scroll; /* Add a scrollbar */
+    padding: 10px;
+    border-radius: 5px;
+    white-space: pre-wrap; /* Wrap long lines */
+    word-wrap: break-word;
+}
+
+/* Style for the heatmap toggle label */
+.form-check-label {
+    color: #FFF; /* Make text white on dark header */
+}
+
+/* *** NEW: Cursor style when in "Create Incident" mode *** */
+#map.creating-incident {
+    cursor: crosshair;
+}

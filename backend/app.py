@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 import time
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS 
 from geopy.geocoders import Nominatim 
 import threading
@@ -10,12 +10,51 @@ import networkx as nx
 import traci
 import sumolib 
 import atexit
+import logging 
+from collections import deque 
 
 # --- 1. CONFIGURE FLASK APP ---
 app = Flask(__name__)
 CORS(app) 
 geolocator = Nominatim(user_agent="pathsync-v3-router")
-# -----------------------------
+
+# --- GLOBAL STATE FOR ADMIN DASHBOARD ---
+ADMIN_STATE = {
+    "edge_heatmap_data": [], # <-- NEW: For heatmap
+    "total_routes_calculated": 0, 
+    "total_incidents_reported": 0 
+}
+# ----------------------------------------
+
+# --- THREAD-SAFE LOGGING SETUP ---
+log_queue = deque(maxlen=50) 
+log_lock = threading.Lock()
+
+class AdminLogHandler(logging.Handler):
+    """A custom log handler that captures logs for the admin panel."""
+    def emit(self, record):
+        msg = self.format(record)
+        with log_lock:
+            log_queue.append(msg)
+
+# Create and configure the handler
+admin_handler = AdminLogHandler()
+admin_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(message)s', '%H:%M:%S')
+admin_handler.setFormatter(formatter)
+
+# Get the root logger (to capture logging.info)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+# Remove all existing handlers to avoid duplicates
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+root_logger.addHandler(admin_handler)
+
+# Also add to Flask's specific logger
+app.logger.addHandler(admin_handler)
+# ----------------------------------------
+
 
 # --- 2. FIND AND IMPORT TRACI / SUMOLIB ---
 if 'SUMO_HOME' in os.environ:
@@ -25,83 +64,67 @@ else:
     sys.exit("please declare 'SUMO_HOME' as an environment variable")
 
 # --- 3. DEFINE SUMO COMMAND ---
-sumoBinary = "sumo" # FINAL: Run Headless for maximum speed
+sumoBinary = "sumo" 
 sumo_net_file = "simulation/map.net.xml" 
 sumoConfig = "simulation/map.sumocfg"
 
 sumoCmd = [
     sumoBinary,
     "-c", sumoConfig,
-    "--gui-settings-file", "simulation/map.view.xml", # <-- ADD THIS LINE
-    "--end", "3600" # Must match the 1-hour simulation length
+    "--gui-settings-file", "simulation/map.view.xml",
+    "--end", "3600" 
 ]
 
-# --- 6. LOAD/CREATE YOUR ROUTING GRAPH (FIXED LOGIC) ---
-print("Loading SUMO map into NetworkX graph...")
+# --- 6. LOAD/CREATE YOUR ROUTING GRAPH (FIXED "ISLAND" BUG) ---
+app.logger.info("Loading SUMO map into NetworkX graph...")
 
 net = sumolib.net.readNet(sumo_net_file)
 G = nx.MultiDiGraph() 
 edge_id_to_uv = {} # Lookup map for O(n) efficiency
 
-print("Adding routable nodes to graph...")
-# --- 1. ADD NODES FIRST ---
-# This is the correct logic: We must add nodes with their data *before* adding edges.
-# Create a set of all nodes that are part of a 'passenger' (drivable) edge
-routable_nodes = set()
-for edge in net.getEdges():
-    if edge.allows("passenger"):
-        routable_nodes.add(edge.getFromNode())
-        routable_nodes.add(edge.getToNode())
-
-for node in routable_nodes:
+app.logger.info("Adding ALL nodes to graph...")
+for node in net.getNodes():
     node_id = node.getID()
     x, y = node.getCoord()
     lon, lat = net.convertXY2LonLat(x, y)
-    # This ensures every node in G has its x, y, lon, lat attributes
     G.add_node(node_id, x=x, y=y, lon=lon, lat=lat)
+app.logger.info(f"Added {len(G.nodes())} total nodes.")
 
-print(f"Added {len(G.nodes())} routable nodes.")
-
-# --- 2. NOW, ADD EDGES ---
-print("Adding routable edges to graph...")
+# --- 2. NOW, ADD ALL EDGES ---
+app.logger.info("Adding ALL edges to graph...")
 routable_edge_count = 0
 for edge in net.getEdges():
-    if not edge.allows("passenger"):
-        continue
-
     edge_id = edge.getID()
     from_node = edge.getFromNode().getID()
     to_node = edge.getToNode().getID()
     
-    # We only add edges that connect nodes we've already added
     if from_node in G and to_node in G:
         length = edge.getLength()
         speed = edge.getSpeed()
-        travel_time = length / speed
+        travel_time = length / (speed + 0.001) 
         
-        G.add_edge(from_node, to_node, key=edge_id, length=length, travel_time=travel_time)
+        G.add_edge(from_node, to_node, key=edge_id, length=length, travel_time=travel_time, original_travel_time=travel_time) # <-- Store original time
         edge_id_to_uv[edge_id] = (from_node, to_node)
         routable_edge_count += 1
     
-print(f"NetworkX graph 'G' created successfully with {routable_edge_count} routable edges.")
+app.logger.info(f"NetworkX graph 'G' created successfully with {routable_edge_count} routable edges.")
+# --- END OF GRAPH LOADING FIX ---
 
 
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL - "DUAL AI") ---
+# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (SIMPLIFIED) ---
 def update_live_traffic():
     """
-    (FINAL) The main "AI Engine" loop with our most robust DUAL AI:
-    1. AI Signal Manager (Pressure = Cars * WaitTime)
-    2. AI Incident Detector (Detects Halting Queues)
+    (FINAL - HEATMAP READY) The main "AI Engine" loop.
+    Generates heatmap data and runs the Incident Detector AI.
     """
     
-    print("AI Engine: Background thread started. Attempting to launch and connect...")
+    app.logger.info("AI Engine: Background thread started. Attempting to launch and connect...")
     
     try:
         traci.start(sumoCmd, port=8813)
-        print("AI Engine: SUMO started and Traci connected successfully.")
+        app.logger.info("AI Engine: SUMO started and Traci connected successfully.")
         
-        traffic_light_ids = traci.trafficlight.getIDList()
-        print(f"AI Engine: Found {len(traffic_light_ids)} traffic lights to manage.")
+        # --- REMOVED TRAFFIC LIGHT LOGIC ---
         
         # --- AI INCIDENT DETECTOR STATE ---
         jam_tracker = {} # Stores how long an edge has been "jammed"
@@ -109,7 +132,7 @@ def update_live_traffic():
         JAM_TIME_THRESHOLD = 30 # 30 seconds
         
     except Exception as e:
-        print(f"AI Engine: Failed to launch/connect to Traci: {e}")
+        app.logger.error(f"AI Engine: Failed to launch/connect to Traci: {e}")
         return
 
     # --- This is the main loop ---
@@ -120,71 +143,44 @@ def update_live_traffic():
 
             # --- 1. RUNTIME FIX ---
             if current_time > 3600:
-                print(f"AI Engine: Simulation time {current_time}s > 3600s. Stopping simulation.")
+                app.logger.info(f"AI Engine: Simulation time {current_time}s > 3600s. Stopping simulation.")
                 break 
             
             # --- 2. AI & ROUTING LOGIC (Runs every 10s for speed) ---
             if int(current_time) % 10 == 0:
             
-                # --- AI 1: "PRESSURE" SMART TRAFFIC LIGHT LOGIC ---
-                for tl_id in traffic_light_ids:
-                    incoming_lanes = set(traci.trafficlight.getControlledLanes(tl_id))
-                    if not incoming_lanes: continue 
-
-                    # --- "PRESSURE" LOGIC ---
-                    best_lane = ""
-                    max_pressure = -1
-                    for lane in incoming_lanes:
-                        halting_cars = traci.lane.getLastStepHaltingNumber(lane)
-                        wait_time = traci.lane.getWaitingTime(lane)
-                        pressure = halting_cars * wait_time
-                        if pressure > max_pressure:
-                            max_pressure = pressure
-                            best_lane = lane
-                    
-                    if max_pressure == 0:
-                        continue
-                    # --- END PRESSURE LOGIC ---
-
-                    logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(tl_id)
-                    if not logic: continue
-
-                    settable_phases = logic[0].phases
-                    controlled_lanes = traci.trafficlight.getControlledLanes(tl_id)
-                    best_phase_index = -1 
-
-                    for i, phase in enumerate(settable_phases):
-                        try:
-                            lane_index_in_state = controlled_lanes.index(best_lane)
-                            if lane_index_in_state < len(phase.state):
-                                lane_state = phase.state[lane_index_in_state].lower()
-                                if lane_state == 'g':
-                                    best_phase_index = i 
-                                    break
-                        except Exception: pass 
-                    
-                    current_phase = traci.trafficlight.getPhase(tl_id)
-                    if best_phase_index != -1 and current_phase != best_phase_index:
-                        traci.trafficlight.setPhase(tl_id, best_phase_index)
+                # --- AI 1: "PRESSURE" SMART TRAFFIC LIGHT LOGIC (REMOVED) ---
                 
-                # --- DIGITAL TWIN (Graph Weight Update) ---
+                # --- DIGITAL TWIN (Graph Weight Update) & NEW HEATMAP DATA ---
+                
+                new_heatmap_data = [] # Create a temporary list for thread-safety
+
                 all_sumo_edges = traci.edge.getIDList()
                 for edge_id in all_sumo_edges:
                     if edge_id in edge_id_to_uv:
                         u, v = edge_id_to_uv[edge_id]
-                        if G.edges[u, v, edge_id].get('is_incident') != True:
-                            
-                            # --- AI 2: AUTOMATIC INCIDENT DETECTOR (Halting Cars) ---
+
+                        # --- NEW THREAD-SAFE LOGIC ---
+                        # 1. Check if graph 'G' says this edge is an incident
+                        if G.edges[u, v, edge_id].get('is_incident') == True:
+                            # If so, tell traci to block it
+                            traci.edge.setMaxSpeed(edge_id, 0.1)
+                        
+                        # 2. If 'G' says it's NOT an incident (or was just unblocked by admin)
+                        else:
+                            # 2a. Tell traci to unblock it (set back to original speed)
+                            original_edge = net.getEdge(edge_id)
+                            traci.edge.setMaxSpeed(edge_id, original_edge.getSpeed())
+
+                            # 2b. Run AI 2: AUTOMATIC INCIDENT DETECTOR (Halting Cars)
                             is_normal_edge = not edge_id.startswith(":") and "#" not in edge_id
-                            
                             if is_normal_edge:
                                 halting_cars = traci.edge.getLastStepHaltingNumber(edge_id)
                                 
                                 if halting_cars > JAM_HALT_THRESHOLD:
                                     jam_tracker[edge_id] = jam_tracker.get(edge_id, 0) + 10 
-                                    
                                     if jam_tracker[edge_id] >= JAM_TIME_THRESHOLD:
-                                        print(f"--- AUTO-INCIDENT: Halting queue detected on edge {edge_id}! Applying CRITICAL_COST. ---")
+                                        app.logger.info(f"--- AUTO-INCIDENT: Halting queue detected on edge {edge_id}! Applying CRITICAL_COST. ---")
                                         G[u][v][edge_id]['travel_time'] = 999999
                                         G[u][v][edge_id]['is_incident'] = True
                                         
@@ -199,33 +195,55 @@ def update_live_traffic():
                                             inv_u, inv_v = edge_id_to_uv[inverse_edge_id]
                                             G[inv_u][inv_v][inverse_edge_id]['travel_time'] = 999999
                                             G[inv_u][inv_v][inverse_edge_id]['is_incident'] = True
-                                            print(f"--- AUTO-INCIDENT: Also applied CRITICAL_COST to inverse edge {inverse_edge_id}. ---")
+                                            app.logger.info(f"--- AUTO-INCIDENT: Also applied CRITICAL_COST to inverse edge {inverse_edge_id}. ---")
                                             
                                 else:
                                     jam_tracker[edge_id] = 0
                             
+                            # 2c. Update travel time from SUMO (only if it's still not an incident)
                             if G.edges[u, v, edge_id].get('is_incident') != True:
-                                G.edges[u, v, edge_id]['travel_time'] = traci.edge.getTraveltime(edge_id)
+                                current_travel_time = traci.edge.getTraveltime(edge_id)
+                                G.edges[u, v, edge_id]['travel_time'] = current_travel_time
                                 
-            
-                print(f"AI Engine: Heartbeat. Sim Time: {current_time}s. Lights (Pressure) & Detector (Halting) running.")
+                                # --- NEW HEATMAP LOGIC ---
+                                original_travel_time = G.edges[u, v, edge_id]['original_travel_time']
+                                
+                                # Intensity = how much *worse* is the traffic? (min of 0.1)
+                                intensity = max(0.1, current_travel_time / (original_travel_time + 0.1))
+
+                                # Get location of the start of the edge
+                                node_data = G.nodes[u] 
+                                new_heatmap_data.append({
+                                    "lat": node_data['lat'],
+                                    "lon": node_data['lon'],
+                                    "intensity": intensity
+                                })
+                                # --- END HEATMAP LOGIC ---
+
+                # --- END OF LOOP ---
+                
+                # Now, safely update the global state
+                ADMIN_STATE["edge_heatmap_data"] = new_heatmap_data
+
+                # --- AI HEARTBEAT NOW GOES TO ADMIN LOG ---
+                app.logger.info(f"AI Engine: Heartbeat. Sim Time: {current_time}s.")
 
     except traci.TraCIException as e:
-        print(f"AI Engine: Traci connection error (simulation likely ended): {e}")
+        app.logger.warning(f"AI Engine: Traci connection error (simulation likely ended): {e}")
     except Exception as e:
-        print(f"AI Engine: An unexpected error occurred: {e}")
+        app.logger.error(f"AI Engine: An unexpected error occurred: {e}")
     finally:
-        print("AI Engine: Background thread stopping. Closing Traci connection.")
+        app.logger.info("AI Engine: Background thread stopping. Closing Traci connection.")
         try:
             traci.close()
         except Exception:
             pass 
 
-    print("AI Engine: Background thread stopped.")
+    app.logger.info("AI Engine: Background thread stopped.")
 
 
 # --- 7. START THE BACKGROUND THREAD ---
-print("AI Engine: Starting background thread...")
+app.logger.info("AI Engine: Starting background thread...")
 ai_thread = threading.Thread(target=update_live_traffic, daemon=True)
 ai_thread.start()
 time.sleep(3) # Give SUMO time to boot
@@ -236,28 +254,22 @@ def cleanup_sumo():
     """
     This function is automatically called when the Flask app is stopped.
     """
-    print("Flask server shutting down... closing Traci and SUMO.")
+    app.logger.info("Flask server shutting down... closing Traci and SUMO.")
     try:
         traci.close()
     except Exception as e:
-        print(f"Error closing Traci: {e}")
+        app.logger.error(f"Error closing Traci: {e}")
 # -----------------------------------------------
-
-# Helper function to find the closest node ID...
-# (the rest of your code)
 
 # Helper function to find the closest node ID (FIXED and SAFER)
 def find_closest_node(target_x, target_y):
     min_dist = float('inf')
     closest_node_id = None
     
-    # Safety check in case graph is empty
     if not G.nodes():
         return None
         
-    # Iterate nodes more efficiently and safely
     for node_id, node_data in G.nodes(data=True):
-        # This will now work, because G.add_node() guarantees 'x' and 'y' exist
         dist = (target_x - node_data['x'])**2 + (target_y - node_data['y'])**2
         if dist < min_dist:
             min_dist = dist
@@ -323,6 +335,8 @@ def get_route():
         
         route_coords = [[G.nodes[node]['lat'], G.nodes[node]['lon']] for node in route]
         
+        # --- REMOVED ROUTE COUNTER ---
+        
         return jsonify({
             "status": "success",
             "route_coords": route_coords,
@@ -333,15 +347,14 @@ def get_route():
     except nx.NetworkXNoPath:
         return jsonify({"status": "error", "message": "No valid path found. (The roads may be disconnected or blocked by an incident)"}), 404
     except Exception as e:
-        print(f"--- CRITICAL ERROR in /route --- \n{e}\n--- END ERROR ---")
+        app.logger.error(f"--- CRITICAL ERROR in /route --- \n{e}\n--- END ERROR ---")
         return jsonify({"status": "error", "message": "An error occurred on the server during routing."}), 500
 
 
 @app.route('/report', methods=['POST'])
 def report_incident():
     """
-    (FIXED) Accepts an incident location, blocks it in the routing graph (NetworkX),
-    AND blocks it in the live simulation (SUMO/Traci).
+    (FIXED) Updated to be thread-safe AND only count 1 incident per report.
     """
     data = request.get_json()
     incident_location_name = data.get('location_name', '')
@@ -374,7 +387,10 @@ def report_incident():
         if not edge_to_block:
             return jsonify({"status": "error", "message": "Reported location is on a non-drivable road. Try clicking the middle of a main street."}), 404
             
-        # --- 3. APPLY CRITICAL WEIGHT & SIMULATION BLOCK ---
+        # --- ADDED INCIDENT COUNTER ---
+        ADMIN_STATE["total_incidents_reported"] += 1
+
+        # --- 3. APPLY CRITICAL WEIGHT (THREAD-SAFE) ---
         CRITICAL_COST = 999999 
         edges_blocked = 0
         
@@ -383,17 +399,94 @@ def report_incident():
         # --- Block the primary edge ---
         if edge_id in edge_id_to_uv:
             u, v = edge_id_to_uv[edge_id]
-            # 1. Block for APP REROUTING (NetworkX)
             G[u][v][edge_id]['travel_time'] = CRITICAL_COST
             G[u][v][edge_id]['is_incident'] = True
-            
-            # 2. Block for SIMULATION (SUMO/Traci)
-            traci.edge.setMaxSpeed(edge_id, 0.1) # <-- NEW LINE
-            
             edges_blocked += 1
-            print(f"INCIDENT (Manual): Blocked primary edge {edge_id}")
+            app.logger.info(f"INCIDENT (Manual): Flagged primary edge {edge_id}")
 
-        # --- Block the INVERSE edge (using SAFE string logic) ---
+        # --- (REMOVED) Block the INVERSE edge ---
+
+        app.logger.info(f"INCIDENT DETECTED: {incident_type} reported. {edges_blocked} edge(s) flagged.")
+
+        return jsonify({
+            "status": "success",
+            "message": f"{incident_type} reported successfully. Routes will now avoid this road."
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"--- CRITICAL ERROR in /report ---")
+        app.logger.error(f"Exception: {e}")
+        app.logger.error(f"--- END ERROR ---")
+        return jsonify({"status": "error", "message": "An unexpected server error occurred."}), 500
+
+
+# ==========================================================
+# --- NEW ADMIN API ENDPOINTS ---
+# ==========================================================
+
+@app.route('/admin/dashboard_data')
+def get_dashboard_data():
+    """
+    Provides all live data for the admin dashboard.
+    """
+    # 1. Get all active incidents from the graph
+    incidents = []
+    try:
+        for u, v, key, data in G.edges(keys=True, data=True):
+            if data.get('is_incident') == True:
+                node_data = G.nodes[u]
+                incidents.append({
+                    "edge_id": key,
+                    "lat": node_data['lat'],
+                    "lon": node_data['lon']
+                })
+    except Exception as e:
+        app.logger.error(f"Error reading graph incidents: {e}")
+
+    # 2. Get traffic light data (REMOVED)
+    lights = []
+
+    # 3. Get heatmap data
+    heatmap_data = ADMIN_STATE["edge_heatmap_data"]
+
+    return jsonify({
+        "stats": {
+            # "total_routes_calculated" has been removed
+            "total_incidents_reported": ADMIN_STATE["total_incidents_reported"]
+        },
+        "incidents": incidents,
+        "edge_heatmap_data": heatmap_data # <-- NEW
+    })
+
+# --- NEW LOGGING ENDPOINT ---
+@app.route('/admin/get_logs')
+def get_logs():
+    """Returns the latest captured log messages."""
+    with log_lock:
+        logs = list(log_queue)
+    return jsonify({"logs": logs})
+
+
+@app.route('/admin/unblock_edge', methods=['POST'])
+def unblock_edge():
+    """
+    Lets an admin manually unblock an edge.
+    The AI thread will see this change and unblock it in SUMO.
+    """
+    data = request.get_json()
+    edge_id = data.get('edge_id')
+
+    if not edge_id or edge_id not in edge_id_to_uv:
+        return jsonify({"status": "error", "message": "Invalid edge_id"}), 404
+
+    try:
+        u, v = edge_id_to_uv[edge_id]
+        G.edges[u, v, edge_id]['is_incident'] = False
+        
+        edge = net.getEdge(edge_id)
+        travel_time = edge.getLength() / (edge.getSpeed() + 0.001)
+        G.edges[u, v, edge_id]['travel_time'] = travel_time
+        
         inverse_edge_id = ""
         if edge_id.startswith("-"):
             inverse_edge_id = edge_id[1:]
@@ -402,28 +495,46 @@ def report_incident():
         
         if inverse_edge_id in edge_id_to_uv:
             inv_u, inv_v = edge_id_to_uv[inverse_edge_id]
-            # 1. Block for APP REROUTING (NetworkX)
-            G[inv_u][inv_v][inverse_edge_id]['travel_time'] = CRITICAL_COST
-            G[inv_u][inv_v][inverse_edge_id]['is_incident'] = True
-            
-            # 2. Block for SIMULATION (SUMO/Traci)
-            traci.edge.setMaxSpeed(inverse_edge_id, 0.1) # <-- NEW LINE
-            
-            edges_blocked += 1
-            print(f"INCIDENT (Manual): Also blocked inverse edge {inverse_edge_id}")
+            G.edges[inv_u, inv_v, inverse_edge_id]['is_incident'] = False
+            inv_edge = net.getEdge(inverse_edge_id)
+            inv_travel_time = inv_edge.getLength() / (inv_edge.getSpeed() + 0.001)
+            G.edges[inv_u, inv_v, inverse_edge_id]['travel_time'] = inv_travel_time
 
-        print(f"INCIDENT DETECTED: {incident_type} reported. {edges_blocked} edge(s) blocked.")
-
-        return jsonify({
-            "status": "success",
-            "message": f"{incident_type} reported successfully. Routes will now avoid this road."
-        }), 200
+        app.logger.info(f"--- ADMIN: Manually flagged edge {edge_id} for unblocking ---")
+        return jsonify({"status": "success", "message": f"Edge {edge_id} flagged for unblocking."})
 
     except Exception as e:
-        print(f"--- CRITICAL ERROR in /report ---")
-        print(f"Exception: {e}")
-        print(f"--- END ERROR ---")
-        return jsonify({"status": "error", "message": "An unexpected server error occurred."}), 500
+        app.logger.error(f"Error unblocking edge: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ==========================================================
+# --- ROUTES TO SERVE THE ADMIN WEB PAGE ---
+# ==========================================================
+
+# This route serves the main admin.html page
+@app.route('/admin')
+def serve_admin_page():
+    # We tell Flask to look one directory UP (../) and then into the 'admin' folder
+    return send_from_directory(os.path.join(os.path.dirname(__file__), '..', 'admin'), 'admin.html')
+
+# This route serves the .css and .js files (like admin.js and admin.css)
+@app.route('/admin/<path:filename>')
+def serve_admin_static(filename):
+    return send_from_directory(os.path.join(os.path.dirname(__file__), '..', 'admin'), filename)
+
+# ==========================================================
     
-    if __name__ == '__main__':
-        app.run(debug=True, host='0.0.0.0', port=5000)
+if __name__ == '__main__':
+    # --- ADDED LOG HANDLER TO FLASK APP ---
+    # We get all loggers and add our handler
+    for logger in (
+        app.logger,
+        logging.getLogger('werkzeug'), # Captures server requests
+        root_logger, # Root logger
+    ):
+        # Remove default handlers if they exist
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+        logger.addHandler(admin_handler)
+    # -------------------------------------
+    app.run(debug=True, host='0.0.0.0', port=5000)
