@@ -424,3 +424,6 @@ def report_incident():
         print(f"Exception: {e}")
         print(f"--- END ERROR ---")
         return jsonify({"status": "error", "message": "An unexpected server error occurred."}), 500
+    
+    if __name__ == '__main__':
+        app.run(debug=True, host='0.0.0.0', port=5000)
