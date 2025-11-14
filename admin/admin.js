@@ -8,9 +8,10 @@ let map;
 let incidentLayerGroup;
 let heatmapLayer;
 let logBox;
-let incidentHistoryChart; // <-- Chart variable
+let incidentHistoryChart;
+let resolvedHistoryChart; // <-- NEW: Chart variable
 let isCreatingIncident = false; 
-let isResolvingIncident = false; // <-- NEW: Global flag for resolve mode
+let isResolvingIncident = false;
 
 document.addEventListener('DOMContentLoaded', () => {
     
@@ -39,12 +40,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     console.log('Map and Heatmap initialized successfully');
 
-    // 3. --- NEW: Initialize Incident History Chart ---
+    // 3. --- Initialize Incident History Chart ---
     const historyCtx = document.getElementById('history-chart').getContext('2d');
     incidentHistoryChart = new Chart(historyCtx, {
         type: 'line',
         data: {
-            // No 'labels' array needed here for time-series
             datasets: [{
                 label: 'Incidents Reported',
                 data: [], // Will be {x, y} objects
@@ -57,14 +57,13 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         options: {
             scales: {
-                // --- NEW: X-axis is now 'time' ---
                 x: {
                     type: 'time',
                     time: {
                         unit: 'minute',
-                        tooltipFormat: 'HH:mm:ss', // Format for tooltips
+                        tooltipFormat: 'HH:mm:ss',
                         displayFormats: {
-                            minute: 'HH:mm:ss' // Format for the axis label
+                            minute: 'HH:mm:ss'
                         }
                     },
                     title: {
@@ -72,11 +71,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         text: 'Time of Incident'
                     }
                 },
-                // --- Y-axis is unchanged ---
                 y: {
                     beginAtZero: true,
                     ticks: {
-                        stepSize: 1 // Only show whole numbers (1, 2, 3)
+                        stepSize: 1
                     },
                     title: {
                         display: true,
@@ -88,10 +86,57 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     console.log('Incident History chart initialized');
 
+    // --- NEW: Initialize Resolved Incident History Chart ---
+    const resolvedHistoryCtx = document.getElementById('resolved-history-chart').getContext('2d');
+    resolvedHistoryChart = new Chart(resolvedHistoryCtx, {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: 'Incidents Resolved',
+                data: [], // Will be {x, y} objects
+                backgroundColor: 'rgba(13, 202, 240, 0.1)', // Bootstrap 'info' color
+                borderColor: 'rgba(13, 202, 240, 1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.1
+            }]
+        },
+        options: {
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: 'minute',
+                        tooltipFormat: 'HH:mm:ss',
+                        displayFormats: {
+                            minute: 'HH:mm:ss'
+                        }
+                    },
+                    title: {
+                        display: true,
+                        text: 'Time of Resolution'
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        stepSize: 1
+                    },
+                    title: {
+                        display: true,
+                        text: 'Total Incidents Resolved'
+                    }
+                }
+            }
+        }
+    });
+    console.log('Incident Resolution History chart initialized');
+
+
     // 4. Set up Toggle Switches
     const heatmapToggle = document.getElementById('heatmap-toggle');
     const createIncidentToggle = document.getElementById('create-incident-toggle');
-    const resolveIncidentToggle = document.getElementById('resolve-incident-toggle'); // <-- NEW: Get resolve toggle
+    const resolveIncidentToggle = document.getElementById('resolve-incident-toggle');
 
     heatmapToggle.addEventListener('change', () => {
         if (heatmapToggle.checked) {
@@ -108,14 +153,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isCreatingIncident) {
             mapContainer.classList.add('creating-incident');
             
-            // --- NEW: Ensure other toggle is off ---
             if (resolveIncidentToggle.checked) {
                 resolveIncidentToggle.checked = false;
                 isResolvingIncident = false;
                 mapContainer.classList.remove('resolving-incident');
             }
-            // ----------------------------------------
-
             console.log('Create Incident mode ENABLED');
         } else {
             mapContainer.classList.remove('creating-incident');
@@ -123,26 +165,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- NEW: Add Event Listener for Resolve Toggle ---
     resolveIncidentToggle.addEventListener('change', () => {
         isResolvingIncident = resolveIncidentToggle.checked;
         if (isResolvingIncident) {
             mapContainer.classList.add('resolving-incident');
 
-            // Ensure other toggle is off
             if (createIncidentToggle.checked) {
                 createIncidentToggle.checked = false;
                 isCreatingIncident = false;
                 mapContainer.classList.remove('creating-incident');
             }
-            
             console.log('Resolve Incident mode ENABLED');
         } else {
             mapContainer.classList.remove('resolving-incident');
             console.log('Resolve Incident mode DISABLED');
         }
     });
-    // --- END NEW ---
 
     map.on('click', (e) => {
         if (isCreatingIncident) {
@@ -160,15 +198,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // 5. Start fetching data
-    fetchDashboardData(); // Fetch live map data
-    fetchLogs(); // Fetch log data
-    fetchIncidentHistory(); // <-- NEW: Fetch history data
-    fetchStatusData(); // <-- NEW: Fetch latency on load
+    fetchDashboardData();
+    fetchLogs();
+    fetchIncidentHistory();
+    fetchResolvedHistory(); // <-- NEW
+    fetchStatusData();
     
     setInterval(fetchDashboardData, 5000); 
     setInterval(fetchLogs, 3000); 
-    setInterval(fetchIncidentHistory, 5000); // <-- NEW: Refresh history
-    setInterval(fetchStatusData, 2000); // <-- NEW: Poll latency every 2 seconds
+    setInterval(fetchIncidentHistory, 5000);
+    setInterval(fetchResolvedHistory, 5000); // <-- NEW
+    setInterval(fetchStatusData, 2000);
 });
 
 
@@ -183,11 +223,8 @@ async function fetchDashboardData() {
         }
         const data = await response.json();
 
-        // --- 1. Update Map with Incidents ---
         updateMap(data.incidents); 
-        // --- 2. Update Heatmap ---
         updateHeatmap(data.edge_heatmap_data);
-        // --- 3. (REMOVED) updateStats ---
 
     } catch (error) {
         console.error('Failed to fetch dashboard data:', error);
@@ -195,7 +232,7 @@ async function fetchDashboardData() {
 }
 
 /**
- * --- NEW: Fetches the incident history from the backend. ---
+ * Fetches the incident history from the backend.
  */
 async function fetchIncidentHistory() {
     try {
@@ -204,7 +241,7 @@ async function fetchIncidentHistory() {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const histData = await response.json();
-        updateHistoryChart(histData.history);
+        updateHistoryChart(histData.history, incidentHistoryChart); // <-- Pass chart instance
 
     } catch (error) {
         console.error('Failed to fetch incident history:', error);
@@ -212,12 +249,29 @@ async function fetchIncidentHistory() {
 }
 
 /**
- * --- FIX: Updates the chart with the FULL history. ---
+ * --- NEW: Fetches the resolved incident history from the backend. ---
  */
-function updateHistoryChart(timestamps) {
-    if (!incidentHistoryChart) return;
+async function fetchResolvedHistory() {
+    try {
+        const response = await fetch(`${BACKEND_URL}/admin/resolved_history`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const histData = await response.json();
+        updateHistoryChart(histData.history, resolvedHistoryChart); // <-- Pass chart instance
 
-    // --- Process data into {x, y} pairs ---
+    } catch (error) {
+        console.error('Failed to fetch resolved incident history:', error);
+    }
+}
+
+
+/**
+ * --- UPDATED: Reusable function to update any time-series chart. ---
+ */
+function updateHistoryChart(timestamps, chartInstance) {
+    if (!chartInstance) return;
+
     const chartData = timestamps.map((ts, index) => {
         return {
             x: ts * 1000, // Chart.js needs timestamps in milliseconds
@@ -226,12 +280,13 @@ function updateHistoryChart(timestamps) {
     });
 
     // Update the chart
-    incidentHistoryChart.data.datasets[0].data = chartData;
-    incidentHistoryChart.update();
+    chartInstance.data.datasets[0].data = chartData;
+    chartInstance.update();
 }
 
+
 /**
- * --- NEW: Fetches the latest system status (e.g., latency) ---
+ * Fetches the latest system status (e.g., latency)
  */
 async function fetchStatusData() {
     try {
@@ -250,7 +305,7 @@ async function fetchStatusData() {
 }
 
 /**
- * --- NEW: Updates the latency stat card in the DOM. ---
+ * Updates the latency stat card in the DOM.
  */
 function updateLatencyStat(latency) {
     const statElement = document.getElementById('latency-stat');
@@ -326,21 +381,15 @@ function updateMap(incidents) {
         const marker = L.marker(latLon, { icon: redIcon })
             .bindPopup(popupContent);
         
-        // --- THIS IS THE NEW LOGIC ---
         marker.on('click', (e) => {
-            // Check if we are in resolve mode
             if (isResolvingIncident) {
-                // Stop the popup from opening
                 e.originalEvent.preventDefault();
                 e.originalEvent.stopPropagation();
                 
-                // Ask for confirmation
                 if (confirm("is the incident rectified?")) {
-                    // If yes, call the existing unblockEdge function
                     unblockEdge(incident.edge_id);
                 }
                 
-                // De-select the toggle after the action is done
                 const resolveIncidentToggle = document.getElementById('resolve-incident-toggle');
                 const mapContainer = document.getElementById('map');
 
@@ -349,9 +398,7 @@ function updateMap(incidents) {
                 mapContainer.classList.remove('resolving-incident');
                 console.log('Resolve Incident mode DISABLED');
             }
-            // If not in resolve mode, the click will just open the popup as normal.
         });
-        // --- END OF NEW LOGIC ---
 
         incidentLayerGroup.addLayer(marker);
     });
@@ -393,7 +440,8 @@ async function unblockEdge(edge_id) {
             alert('Edge unblocked successfully! Refreshing data.');
             map.closePopup(); 
             fetchDashboardData(); 
-            fetchIncidentHistory(); // <-- NEW: Refresh history chart too
+            fetchIncidentHistory(); 
+            fetchResolvedHistory(); // <-- NEW: Refresh resolved chart too
         } else {
             alert(`Failed to unblock edge: ${result.message}`);
         }
@@ -422,7 +470,7 @@ async function createIncident(location_name) {
         if (response.ok && result.status === 'success') {
             alert('Incident created successfully! Refreshing data.');
             fetchDashboardData(); // Instantly refresh the map
-            fetchIncidentHistory(); // <-- NEW: Refresh history chart too
+            fetchIncidentHistory(); // Instantly refresh the chart
         } else {
             alert(`Failed to create incident: ${result.message}`);
         }

@@ -17,7 +17,7 @@ from collections import deque
 app = Flask(__name__)
 CORS(app) 
 geolocator = Nominatim(user_agent="pathsync-v3-router")
-g_traci_latency_ms = 0.0 # <-- NEW: Global for latency
+g_traci_latency_ms = 0.0
 
 # --- GLOBAL STATE FOR ADMIN DASHBOARD ---
 ADMIN_STATE = {
@@ -25,9 +25,12 @@ ADMIN_STATE = {
     "total_routes_calculated": 0, 
     "total_incidents_reported": 0 
 }
-# --- NEW: INCIDENT HISTORY ---
+# --- INCIDENT HISTORY ---
 INCIDENT_HISTORY = []
 history_lock = threading.Lock()
+# --- NEW: RESOLVED INCIDENT HISTORY ---
+RESOLVED_INCIDENT_HISTORY = []
+resolved_history_lock = threading.Lock()
 # -----------------------------
 
 # --- THREAD-SAFE LOGGING SETUP ---
@@ -126,7 +129,7 @@ def update_live_traffic():
     (FINAL - ADMIN READY) The main "AI Engine" loop.
     Populates ADMIN_STATE for the dashboard and is fully thread-safe.
     """
-    global g_traci_latency_ms # <-- NEW: Get global latency var
+    global g_traci_latency_ms
     
     app.logger.info("AI Engine: Background thread started. Attempting to launch and connect...")
     
@@ -487,6 +490,14 @@ def get_incident_history():
         history = list(INCIDENT_HISTORY)
     return jsonify({"history": history})
 
+# --- NEW: RESOLVED HISTORY ENDPOINT ---
+@app.route('/admin/resolved_history')
+def get_resolved_history():
+    """Returns the list of resolved incident timestamps."""
+    with resolved_history_lock:
+        history = list(RESOLVED_INCIDENT_HISTORY)
+    return jsonify({"history": history})
+
 
 @app.route('/admin/unblock_edge', methods=['POST'])
 def unblock_edge():
@@ -502,6 +513,15 @@ def unblock_edge():
 
     try:
         u, v = edge_id_to_uv[edge_id]
+        
+        # --- NEW: Check if edge was actually an incident before logging ---
+        if G.edges[u, v, edge_id].get('is_incident') == True:
+            # Add to resolved history
+            with resolved_history_lock:
+                RESOLVED_INCIDENT_HISTORY.append(time.time())
+            app.logger.info(f"--- ADMIN: Manually flagged edge {edge_id} for unblocking ---")
+        
+        # Unflag it
         G.edges[u, v, edge_id]['is_incident'] = False
         
         edge = net.getEdge(edge_id)
@@ -521,7 +541,7 @@ def unblock_edge():
             inv_travel_time = inv_edge.getLength() / (inv_edge.getSpeed() + 0.001)
             G.edges[inv_u, inv_v, inverse_edge_id]['travel_time'] = inv_travel_time
 
-        app.logger.info(f"--- ADMIN: Manually flagged edge {edge_id} for unblocking ---")
+        
         return jsonify({"status": "success", "message": f"Edge {edge_id} flagged for unblocking."})
 
     except Exception as e:
@@ -558,7 +578,5 @@ def serve_admin_static(filename):
 # ==========================================================
     
 if __name__ == '__main__':
-    # --- THIS BLOCK IS NOW CLEAN ---
-    # The logging setup at the top of the file (lines 31-47)
-    # is all that is needed.
+    # This block is now clean and correct
     app.run(debug=True, host='0.0.0.0', port=5000)

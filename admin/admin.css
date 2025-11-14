@@ -16,7 +16,7 @@
     color: #00ff00; /* Green text */
     font-family: 'Courier New', Courier, monospace;
     font-size: 0.85rem;
-    height: 500px; /* Increased height */
+    height: 300px; /* *** REDUCED HEIGHT to fit new layout *** */
     overflow-y: scroll; /* Add a scrollbar */
     padding: 10px;
     border-radius: 5px;
@@ -29,12 +29,12 @@
     color: #FFF; /* Make text white on dark header */
 }
 
-/* *** NEW: Cursor style when in "Create Incident" mode *** */
+/* Cursor style when in "Create Incident" mode */
 #map.creating-incident {
     cursor: crosshair;
 }
 
-/* *** NEW: Cursor style when in "Resolve Incident" mode *** */
+/* Cursor style when in "Resolve Incident" mode */
 #map.resolving-incident {
     cursor: help; /* A 'help' cursor indicates you can interact */
 }

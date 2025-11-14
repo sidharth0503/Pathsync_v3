@@ -38,6 +38,7 @@
                         <p class="card-text text-muted mb-0">milliseconds (ms)</p>
                     </div>
                 </div>
+
                 <div class="card shadow-sm mb-4">
                     <div class="card-header bg-danger text-white">
                         <i class="bi bi-clock-history me-2"></i>Incident History
@@ -47,12 +48,12 @@
                     </div>
                 </div>
 
-                <div class="card shadow-sm">
-                    <div class="card-header">
-                        <i class="bi bi-terminal-fill me-2"></i>System Event Log
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-info text-white">
+                        <i class="bi bi-check-circle-fill me-2"></i>Incident Resolution History
                     </div>
                     <div class="card-body">
-                        <pre id="log-box">Initializing system...</pre>
+                        <canvas id="resolved-history-chart"></canvas>
                     </div>
                 </div>
 
@@ -87,6 +88,16 @@
                         <div id="map"></div>
                     </div>
                 </div>
+
+                <div class="card shadow-sm mt-4">
+                    <div class="card-header">
+                        <i class="bi bi-terminal-fill me-2"></i>System Event Log
+                    </div>
+                    <div class="card-body">
+                        <pre id="log-box">Initializing system...</pre>
+                    </div>
+                </div>
+
             </div>
 
         </div>
