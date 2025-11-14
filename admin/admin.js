@@ -8,7 +8,7 @@ let map;
 let incidentLayerGroup;
 let heatmapLayer;
 let logBox;
-let incidentHistoryChart; // <-- NEW: Chart variable
+let incidentHistoryChart; // <-- Chart variable
 let isCreatingIncident = false; 
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -43,10 +43,10 @@ document.addEventListener('DOMContentLoaded', () => {
     incidentHistoryChart = new Chart(historyCtx, {
         type: 'line',
         data: {
-            labels: [], // Will be timestamps (e.g., "19:15:05")
+            // No 'labels' array needed here for time-series
             datasets: [{
                 label: 'Incidents Reported',
-                data: [], // Will be a cumulative count (e.g., 1, 2, 3)
+                data: [], // Will be {x, y} objects
                 backgroundColor: 'rgba(220, 53, 69, 0.1)',
                 borderColor: 'rgba(220, 53, 69, 1)',
                 borderWidth: 2,
@@ -56,10 +56,30 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         options: {
             scales: {
+                // --- NEW: X-axis is now 'time' ---
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: 'minute',
+                        tooltipFormat: 'HH:mm:ss', // Format for tooltips
+                        displayFormats: {
+                            minute: 'HH:mm:ss' // Format for the axis label
+                        }
+                    },
+                    title: {
+                        display: true,
+                        text: 'Time of Incident'
+                    }
+                },
+                // --- Y-axis is unchanged ---
                 y: {
                     beginAtZero: true,
                     ticks: {
                         stepSize: 1 // Only show whole numbers (1, 2, 3)
+                    },
+                    title: {
+                        display: true,
+                        text: 'Total Incidents'
                     }
                 }
             }
@@ -158,30 +178,24 @@ async function fetchIncidentHistory() {
 }
 
 /**
- * --- NEW: Updates the incident history line chart. ---
+ * --- FIX: Updates the chart with the FULL history. ---
  */
 function updateHistoryChart(timestamps) {
     if (!incidentHistoryChart) return;
 
-    // Take only the last 10 incidents for a clean chart
-    const lastTenTimestamps = timestamps.slice(-10);
+    // --- REMOVED this line: const lastTenTimestamps = timestamps.slice(-10); ---
 
-    // Process the timestamps into labels and data
-    const labels = lastTenTimestamps.map(ts => 
-        new Date(ts * 1000).toLocaleTimeString('en-US', {
-            hour: '2-digit', 
-            minute: '2-digit', 
-            second: '2-digit',
-            hour12: false
-        })
-    );
-    
-    // Create a cumulative count (1, 2, 3...)
-    const data = lastTenTimestamps.map((_, index) => index + 1);
+    // --- Process data into {x, y} pairs ---
+    // Changed to use the full 'timestamps' array
+    const chartData = timestamps.map((ts, index) => {
+        return {
+            x: ts * 1000, // Chart.js needs timestamps in milliseconds
+            y: index + 1  // Cumulative count (1, 2, 3...)
+        };
+    });
 
     // Update the chart
-    incidentHistoryChart.data.labels = labels;
-    incidentHistoryChart.data.datasets[0].data = data;
+    incidentHistoryChart.data.datasets[0].data = chartData;
     incidentHistoryChart.update();
 }
 
