@@ -10,6 +10,7 @@ let heatmapLayer;
 let logBox;
 let incidentHistoryChart; // <-- Chart variable
 let isCreatingIncident = false; 
+let isResolvingIncident = false; // <-- NEW: Global flag for resolve mode
 
 document.addEventListener('DOMContentLoaded', () => {
     
@@ -90,6 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 4. Set up Toggle Switches
     const heatmapToggle = document.getElementById('heatmap-toggle');
     const createIncidentToggle = document.getElementById('create-incident-toggle');
+    const resolveIncidentToggle = document.getElementById('resolve-incident-toggle'); // <-- NEW: Get resolve toggle
 
     heatmapToggle.addEventListener('change', () => {
         if (heatmapToggle.checked) {
@@ -104,13 +106,43 @@ document.addEventListener('DOMContentLoaded', () => {
     createIncidentToggle.addEventListener('change', () => {
         isCreatingIncident = createIncidentToggle.checked;
         if (isCreatingIncident) {
-            mapContainer.classList.add('creating-incident'); // Add crosshair cursor
+            mapContainer.classList.add('creating-incident');
+            
+            // --- NEW: Ensure other toggle is off ---
+            if (resolveIncidentToggle.checked) {
+                resolveIncidentToggle.checked = false;
+                isResolvingIncident = false;
+                mapContainer.classList.remove('resolving-incident');
+            }
+            // ----------------------------------------
+
             console.log('Create Incident mode ENABLED');
         } else {
-            mapContainer.classList.remove('creating-incident'); // Remove crosshair
+            mapContainer.classList.remove('creating-incident');
             console.log('Create Incident mode DISABLED');
         }
     });
+
+    // --- NEW: Add Event Listener for Resolve Toggle ---
+    resolveIncidentToggle.addEventListener('change', () => {
+        isResolvingIncident = resolveIncidentToggle.checked;
+        if (isResolvingIncident) {
+            mapContainer.classList.add('resolving-incident');
+
+            // Ensure other toggle is off
+            if (createIncidentToggle.checked) {
+                createIncidentToggle.checked = false;
+                isCreatingIncident = false;
+                mapContainer.classList.remove('creating-incident');
+            }
+            
+            console.log('Resolve Incident mode ENABLED');
+        } else {
+            mapContainer.classList.remove('resolving-incident');
+            console.log('Resolve Incident mode DISABLED');
+        }
+    });
+    // --- END NEW ---
 
     map.on('click', (e) => {
         if (isCreatingIncident) {
@@ -185,10 +217,7 @@ async function fetchIncidentHistory() {
 function updateHistoryChart(timestamps) {
     if (!incidentHistoryChart) return;
 
-    // --- REMOVED this line: const lastTenTimestamps = timestamps.slice(-10); ---
-
     // --- Process data into {x, y} pairs ---
-    // Changed to use the full 'timestamps' array
     const chartData = timestamps.map((ts, index) => {
         return {
             x: ts * 1000, // Chart.js needs timestamps in milliseconds
@@ -260,7 +289,7 @@ async function fetchLogs() {
 function updateLogBox(logs) {
     if (logBox) {
         logBox.textContent = logs.join('\n');
-        logBox.scrollTop = logA.scrollHeight;
+        logBox.scrollTop = logBox.scrollHeight;
     }
 }
 
@@ -297,6 +326,33 @@ function updateMap(incidents) {
         const marker = L.marker(latLon, { icon: redIcon })
             .bindPopup(popupContent);
         
+        // --- THIS IS THE NEW LOGIC ---
+        marker.on('click', (e) => {
+            // Check if we are in resolve mode
+            if (isResolvingIncident) {
+                // Stop the popup from opening
+                e.originalEvent.preventDefault();
+                e.originalEvent.stopPropagation();
+                
+                // Ask for confirmation
+                if (confirm("is the incident rectified?")) {
+                    // If yes, call the existing unblockEdge function
+                    unblockEdge(incident.edge_id);
+                }
+                
+                // De-select the toggle after the action is done
+                const resolveIncidentToggle = document.getElementById('resolve-incident-toggle');
+                const mapContainer = document.getElementById('map');
+
+                resolveIncidentToggle.checked = false;
+                isResolvingIncident = false;
+                mapContainer.classList.remove('resolving-incident');
+                console.log('Resolve Incident mode DISABLED');
+            }
+            // If not in resolve mode, the click will just open the popup as normal.
+        });
+        // --- END OF NEW LOGIC ---
+
         incidentLayerGroup.addLayer(marker);
     });
 }

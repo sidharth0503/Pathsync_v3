@@ -33,3 +33,8 @@
 #map.creating-incident {
     cursor: crosshair;
 }
+
+/* *** NEW: Cursor style when in "Resolve Incident" mode *** */
+#map.resolving-incident {
+    cursor: help; /* A 'help' cursor indicates you can interact */
+}
