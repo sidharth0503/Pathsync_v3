@@ -155,8 +155,8 @@ def update_live_traffic():
         
         # --- AI INCIDENT DETECTOR STATE ---
         jam_tracker = {} # Stores how long an edge has been "jammed"
-        JAM_HALT_THRESHOLD = 10 # 10 stopped cars
-        JAM_TIME_THRESHOLD = 30 # 30 seconds
+        JAM_HALT_THRESHOLD = 5 # 10 stopped cars
+        JAM_TIME_THRESHOLD = 10 # 30 seconds
         
         # --- FIX: Moved location finding to *inside* the loop ---
         traffic_lights_initialized = False
