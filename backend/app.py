@@ -136,7 +136,6 @@ app.logger.info(f"NetworkX graph 'G' created successfully with {routable_edge_co
 
 
 # --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL - "DUAL AI") ---
-# --- 5. DEFINE "AI ENGINE" HEARTBEAT FUNCTION (FINAL - "DUAL AI") ---
 def update_live_traffic():
     """
     (FINAL - ADMIN READY) The main "AI Engine" loop.
