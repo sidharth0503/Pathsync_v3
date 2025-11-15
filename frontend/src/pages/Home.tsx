@@ -66,7 +66,7 @@ const Home: React.FC = () => {
   const [heading, setHeading] = useState<number>(0);
 
   // --- FIXED: Backend URLs for Android emulator ---
-  const YOUR_COMPUTER_IP = "10.60.212.227"; // This should be your computer's IP
+  const YOUR_COMPUTER_IP = "192.168.1.3"; // This should be your computer's IP
   const BACKEND_URL = `http://${YOUR_COMPUTER_IP}:5000/route`;
   const REPORT_URL = `http://${YOUR_COMPUTER_IP}:5000/report`;
 

@@ -1,4 +1,4 @@
-**Pathsync v3: An Adaptive Urban Traffic Management System**
+**Pathsync v3: Adaptive Urban Traffic Management System**
 
 **Status:** Stable
 
@@ -120,7 +120,7 @@ cd \[REPOSITORY_FOLDER\]
 
 \# It is recommended to use a virtual environment  
 python -m venv venv  
-source venv/bin/activate  # (or .\\venv\\Scripts\\activate on Windows)  
+source venv/bin/activate # (or .\\venv\\Scripts\\activate on Windows)  
 <br/>\# Install required packages  
 pip install Flask flask_cors geopy networkx  
 <br/>
@@ -132,13 +132,13 @@ This single command starts the Flask server, which in turn launches the AI threa
 python app.py  
 <br/>
 
-The server will be running at <http://127.0.0.1:5000/>
+The server will be running at <http://127.0.0.1:5500/>
 
 **Step 4: Access the Admin Dashboard**
 
 Open your web browser and navigate to:
 
-<http://127.0.0.1:5000/admin>
+<http://127.0.0.1:5500/admin>
 
 **Step 5: Run the Mobile App**
 
